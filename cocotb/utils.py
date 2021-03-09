@@ -28,19 +28,24 @@
 """Collection of handy functions."""
 
 import ctypes
+import inspect
 import math
 import os
 import sys
+import traceback
 import weakref
 import functools
 import warnings
 
-if "COCOTB_SIM" in os.environ:
-    from cocotb import simulator
-    _LOG_SIM_PRECISION = simulator.get_precision()  # request once and cache
-else:
-    simulator = None
-    _LOG_SIM_PRECISION = -15
+from cocotb import simulator
+
+
+def _get_simulator_precision():
+    # cache and replace this function
+    precision = simulator.get_precision()
+    global _get_simulator_precision
+    _get_simulator_precision = precision.__int__
+    return _get_simulator_precision()
 
 
 def get_python_integer_types():
@@ -94,34 +99,42 @@ def get_time_from_sim_steps(steps, units):
     Returns:
         The simulation time in the specified units.
     """
-    return _ldexp10(steps, _LOG_SIM_PRECISION - _get_log_time_scale(units))
+    return _ldexp10(steps, _get_simulator_precision() - _get_log_time_scale(units))
 
 
-def get_sim_steps(time, units=None):
+def get_sim_steps(time, units="step"):
     """Calculates the number of simulation time steps for a given amount of *time*.
 
     Args:
         time (numbers.Real or decimal.Decimal):  The value to convert to simulation time steps.
-        units (str or None, optional):  String specifying the units of the result
-            (one of ``None``, ``'fs'``, ``'ps'``, ``'ns'``, ``'us'``, ``'ms'``, ``'sec'``).
-            ``None`` means time is already in simulation time steps.
+        units (str, optional):  String specifying the units of the result
+            (one of ``'step'``, ``'fs'``, ``'ps'``, ``'ns'``, ``'us'``, ``'ms'``, ``'sec'``).
+            ``'step'`` means time is already in simulation time steps.
 
     Returns:
         int: The number of simulation time steps.
 
     Raises:
         :exc:`ValueError`: If given *time* cannot be represented by simulator precision.
+
+    .. versionchanged:: 1.5
+        Support ``'step'`` as the the *units* argument to mean "simulator time step".
     """
     result = time
-    if units is not None:
-        result = _ldexp10(result, _get_log_time_scale(units) - _LOG_SIM_PRECISION)
+    if units not in (None, "step"):
+        result = _ldexp10(result, _get_log_time_scale(units) - _get_simulator_precision())
+    if units is None:
+        warnings.warn(
+            'Using units=None is deprecated, use units="step" instead.',
+            DeprecationWarning, stacklevel=2)
+        units="step"  # don't propagate deprecated value
 
     result_rounded = math.floor(result)
 
     if result_rounded != result:
         raise ValueError("Unable to accurately represent {0}({1}) with the "
                          "simulator precision of 1e{2}".format(
-                             time, units, _LOG_SIM_PRECISION))
+                             time, units, _get_simulator_precision()))
 
     return int(result_rounded)
 
@@ -161,7 +174,13 @@ def pack(ctypes_obj):
 
     Returns:
         New Python string containing the bytes from memory holding *ctypes_obj*.
+
+    .. deprecated:: 1.5
+        This function is deprecated, use ``bytes(ctypes_obj)`` instead.
     """
+    warnings.warn(
+        "This function is deprecated and will be removed, use ``bytes(ctypes_obj)`` instead.",
+        DeprecationWarning, stacklevel=2)
     return ctypes.string_at(ctypes.addressof(ctypes_obj),
                             ctypes.sizeof(ctypes_obj))
 
@@ -183,7 +202,15 @@ def unpack(ctypes_obj, string, bytes=None):
         :exc:`ValueError`: If length of *string* and size of *ctypes_obj*
             are not equal.
         :exc:`MemoryError`: If *bytes* is longer than size of *ctypes_obj*.
+
+    .. deprecated:: 1.5
+        Converting bytes to a ctypes object should be done with :meth:`~ctypes._CData.from_buffer_copy`.
+        If you need to assign bytes into an *existing* ctypes object, use ``memoryview(ctypes_obj).cast('B')[:bytes] = string``,
+        see :class:`memoryview` for details.
     """
+    warnings.warn(
+        "This function is being removed, use ``memoryview(ctypes_obj).cast('B')[:bytes] = string`` instead.",
+        DeprecationWarning, stacklevel=2)
     if bytes is None:
         if len(string) != ctypes.sizeof(ctypes_obj):
             raise ValueError("Attempt to unpack a string of size %d into a \
@@ -230,7 +257,7 @@ def hexdump(x: bytes) -> str:
     .. deprecated:: 1.4
         Passing a :class:`str` to this function is deprecated, as it
         is not an appropriate type for binary data. Doing so anyway
-        will encode the string to latin1.
+        will encode the string to ``latin1``.
 
     Example:
         >>> print(hexdump(b'this somewhat long string'))
@@ -273,7 +300,7 @@ def hexdiffs(x: bytes, y: bytes) -> str:
     .. deprecated:: 1.4
         Passing :class:`str`\ s to this function is deprecated, as it
         is not an appropriate type for binary data. Doing so anyway
-        will encode the string to latin1.
+        will encode the string to ``latin1``.
 
     Example:
         >>> print(hexdiffs(b'a', b'b'))
@@ -294,7 +321,6 @@ def hexdiffs(x: bytes, y: bytes) -> str:
             return colour + string + ANSI.COLOR_DEFAULT
         else:
             return string
-
 
     x_is_str = isinstance(x, str)
     y_is_str = isinstance(y, str)
@@ -345,7 +371,6 @@ def hexdiffs(x: bytes, y: bytes) -> str:
     doy = 0
     l = len(backtrackx)
     while i < l:
-        separate = 0
         linex = backtrackx[i:i+16]
         liney = backtracky[i:i+16]
         xx = sum(len(k) for k in linex)
@@ -426,8 +451,6 @@ def hexdiffs(x: bytes, y: bytes) -> str:
     return rs
 
 
-
-
 class ParametrizedSingleton(type):
     """A metaclass that allows class construction to reuse an existing instance.
 
@@ -458,6 +481,10 @@ class ParametrizedSingleton(type):
             self = super(ParametrizedSingleton, cls).__call__(*args, **kwargs)
             cls.__instances[key] = self
             return self
+
+    @property
+    def __signature__(cls):
+        return inspect.signature(cls.__singleton_key__)
 
 
 def reject_remaining_kwargs(name, kwargs):
@@ -503,6 +530,7 @@ class lazy_property:
     This should be used for expensive members of objects that are not always
     used.
     """
+
     def __init__(self, fget):
         self.fget = fget
 
@@ -514,7 +542,7 @@ class lazy_property:
             return self
 
         value = self.fget(obj)
-        setattr(obj, self.fget.__name__, value)
+        setattr(obj, self.fget.__qualname__, value)
         return value
 
 
@@ -524,28 +552,13 @@ def want_color_output():
     Colored output can be explicitly requested by setting :envvar:`COCOTB_ANSI_OUTPUT` to  ``1``.
     """
     want_color = sys.stdout.isatty()  # default to color for TTYs
+    if os.getenv("NO_COLOR") is not None:
+        want_color = False
     if os.getenv("COCOTB_ANSI_OUTPUT", default='0') == '1':
         want_color = True
     if os.getenv("GUI", default='0') == '1':
         want_color = False
     return want_color
-
-
-if __name__ == "__main__":
-    import random
-    a = ""
-    for char in range(random.randint(250, 500)):
-        a += chr(random.randint(0, 255))
-    b = a
-    for error in range(random.randint(2, 9)):
-        offset = random.randint(0, len(a))
-        b = b[:offset] + chr(random.randint(0, 255)) + b[offset+1:]
-
-    diff = hexdiffs(a, b)
-    print(diff)
-
-    space = '\n' + (" " * 20)
-    print(space.join(diff.split('\n')))
 
 
 def remove_traceback_frames(tb_or_exc, frame_names):
@@ -578,3 +591,39 @@ def remove_traceback_frames(tb_or_exc, frame_names):
             assert tb.tb_frame.f_code.co_name == frame_name
             tb = tb.tb_next
         return tb
+
+
+def walk_coro_stack(coro):
+    """Walk down the coroutine stack, starting at *coro*.
+
+    Supports coroutines and generators.
+    """
+    while coro is not None:
+        try:
+            f = getattr(coro, 'cr_frame')
+            coro = coro.cr_await
+        except AttributeError:
+            try:
+                f = getattr(coro, 'gi_frame')
+                coro = coro.gi_yieldfrom
+            except AttributeError:
+                f = None
+                coro = None
+        if f is not None:
+            yield (f, f.f_lineno)
+
+
+def extract_coro_stack(coro, limit=None):
+    """Create a list of pre-processed entries from the coroutine stack.
+
+    This is based on :func:`traceback.extract_tb`.
+
+    If *limit* is omitted or ``None``, all entries are extracted.
+    The list is a :class:`traceback.StackSummary` object, and
+    each entry in the list is a :class:`traceback.FrameSummary` object
+    containing attributes ``filename``, ``lineno``, ``name``, and ``line``
+    representing the information that is usually printed for a stack
+    trace.  The line is a string with leading and trailing
+    whitespace stripped; if the source is not available it is ``None``.
+    """
+    return traceback.StackSummary.extract(walk_coro_stack(coro), limit=limit)

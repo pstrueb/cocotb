@@ -6,12 +6,12 @@ import contextlib
 import logging
 
 import cocotb
-from cocotb.binary import BinaryValue
 from cocotb.clock import Clock
 from cocotb.result import TestFailure
 from cocotb.triggers import Timer
 
 tlog = logging.getLogger("cocotb.test")
+
 
 def _check_value(tlog, hdl, expected):
     if hdl.value != expected:
@@ -175,6 +175,19 @@ async def test_ndim_array_indexes(dut):
     _check_value(tlog, dut.array_2d[0][30], 0xBE)
     _check_value(tlog, dut.array_2d[1]    , [0xDE, 0xAD, 0x12, 0xEF])
 
+
+@cocotb.test(expect_error=AttributeError if cocotb.SIM_NAME.lower().startswith(("icarus", "ghdl")) else ())
+async def test_struct(dut):
+    """Test setting and getting values of structs."""
+    cocotb.fork(Clock(dut.clk, 1000, 'ns').start())
+    dut.inout_if.a_in <= 1
+    await Timer(1000, 'ns')
+    _check_value(tlog, dut.inout_if.a_in, 1)
+    dut.inout_if.a_in <= 0
+    await Timer(1000, 'ns')
+    _check_value(tlog, dut.inout_if.a_in, 0)
+
+
 @contextlib.contextmanager
 def assert_raises(exc_type):
     try:
@@ -183,6 +196,7 @@ def assert_raises(exc_type):
         tlog.info("   {} raised as expected: {}".format(exc_type.__name__, exc))
     else:
         raise AssertionError("{} was not raised".format(exc_type.__name__))
+
 
 @cocotb.test()
 async def test_exceptions(dut):

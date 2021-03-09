@@ -1,3 +1,7 @@
+# Copyright cocotb contributors
+# Licensed under the Revised BSD License, see LICENSE for details.
+# SPDX-License-Identifier: BSD-3-Clause
+
 import cocotb
 
 
@@ -6,7 +10,7 @@ async def whoops_async_generator():
     yield cocotb.triggers.Timer(1)
 
 
-@cocotb.test()
+@cocotb.test()  # testing async generator in legacy coroutine syntax
 def test_yielding_accidental_async_generator(dut):
     # this test deliberately does not use `async def`, as we are testing the behavior of `yield`
     try:
@@ -27,7 +31,7 @@ async def test_forking_accidental_async_generator(dut):
         assert False, "should have thrown"
 
 
-@cocotb.coroutine
+@cocotb.coroutine   # testing cocotb.coroutine decorated async generator
 async def whoops_async_generator_decorated():
     yield cocotb.triggers.Timer(1)
 

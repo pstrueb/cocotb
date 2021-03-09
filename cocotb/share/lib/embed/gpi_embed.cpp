@@ -1,100 +1,115 @@
 /******************************************************************************
-* Copyright (c) 2013, 2018 Potential Ventures Ltd
-* Copyright (c) 2013 SolarFlare Communications Inc
-* All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions are met:
-*    * Redistributions of source code must retain the above copyright
-*      notice, this list of conditions and the following disclaimer.
-*    * Redistributions in binary form must reproduce the above copyright
-*      notice, this list of conditions and the following disclaimer in the
-*      documentation and/or other materials provided with the distribution.
-*    * Neither the name of Potential Ventures Ltd,
-*       SolarFlare Communications Inc nor the
-*      names of its contributors may be used to endorse or promote products
-*      derived from this software without specific prior written permission.
-*
-* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-* ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-* WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-* DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
-* DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-* (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-* LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-* ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-* SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-******************************************************************************/
+ * Copyright (c) 2013, 2018 Potential Ventures Ltd
+ * Copyright (c) 2013 SolarFlare Communications Inc
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *    * Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *    * Redistributions in binary form must reproduce the above copyright
+ *      notice, this list of conditions and the following disclaimer in the
+ *      documentation and/or other materials provided with the distribution.
+ *    * Neither the name of Potential Ventures Ltd,
+ *       SolarFlare Communications Inc nor the
+ *      names of its contributors may be used to endorse or promote products
+ *      derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ ******************************************************************************/
 
 // Embed Python into the simulator using GPI
 
 #include <Python.h>
-#include <unistd.h>
 #include <cocotb_utils.h>
-#include "embed.h"
+#include <exports.h>
+#include <gpi.h>          // gpi_event_t
+#include <gpi_logging.h>  // LOG_* macros
+#include <py_gpi_logging.h>  // py_gpi_logger_set_level, py_gpi_logger_initialize, py_gpi_logger_finalize
+
+#include <cassert>
+
 #include "locale.h"
 
 #if defined(_WIN32)
 #include <windows.h>
 #define sleep(n) Sleep(1000 * n)
+#define getpid() GetCurrentProcessId()
 #ifndef PATH_MAX
 #define PATH_MAX MAX_PATH
 #endif
+#else
+#include <unistd.h>
 #endif
 static PyThreadState *gtstate = NULL;
 
 static wchar_t progname[] = L"cocotb";
-static wchar_t *argv[] = { progname };
+static wchar_t *argv[] = {progname};
 
 #if defined(_WIN32)
-#if defined(__MINGW32__) || defined (__CYGWIN32__)
-const char* PYTHON_INTERPRETER_PATH = "/Scripts/python";
+#if defined(__MINGW32__) || defined(__CYGWIN32__)
+const char *PYTHON_INTERPRETER_PATH = "/Scripts/python";
 #else
-const char* PYTHON_INTERPRETER_PATH = "\\Scripts\\python";
+const char *PYTHON_INTERPRETER_PATH = "\\Scripts\\python";
 #endif
 #else
-const char* PYTHON_INTERPRETER_PATH = "/bin/python";
+const char *PYTHON_INTERPRETER_PATH = "/bin/python";
 #endif
-
 
 static PyObject *pEventFn = NULL;
 
-
-static void set_program_name_in_venv(void)
-{
+static void set_program_name_in_venv(void) {
     static char venv_path[PATH_MAX];
     static wchar_t venv_path_w[PATH_MAX];
 
     const char *venv_path_home = getenv("VIRTUAL_ENV");
     if (!venv_path_home) {
-        LOG_INFO("Did not detect Python virtual environment. Using system-wide Python interpreter");
+        LOG_INFO(
+            "Did not detect Python virtual environment. "
+            "Using system-wide Python interpreter");
         return;
     }
 
-    strncpy(venv_path, venv_path_home, sizeof(venv_path)-1);
+    strncpy(venv_path, venv_path_home, sizeof(venv_path) - 1);
     if (venv_path[sizeof(venv_path) - 1]) {
-        LOG_ERROR("Unable to set Python Program Name using virtual environment. Path to virtual environment too long");
+        LOG_ERROR(
+            "Unable to set Python Program Name using virtual environment. "
+            "Path to virtual environment too long");
         return;
     }
 
-    strncat(venv_path, PYTHON_INTERPRETER_PATH, sizeof(venv_path) - strlen(venv_path) - 1);
+    strncat(venv_path, PYTHON_INTERPRETER_PATH,
+            sizeof(venv_path) - strlen(venv_path) - 1);
     if (venv_path[sizeof(venv_path) - 1]) {
-        LOG_ERROR("Unable to set Python Program Name using virtual environment. Path to interpreter too long");
+        LOG_ERROR(
+            "Unable to set Python Program Name using virtual environment. "
+            "Path to interpreter too long");
         return;
     }
 
-    wcsncpy(venv_path_w, Py_DecodeLocale(venv_path, NULL), sizeof(venv_path_w)/sizeof(wchar_t));
+    wcsncpy(venv_path_w, Py_DecodeLocale(venv_path, NULL),
+            sizeof(venv_path_w) / sizeof(wchar_t));
 
-    if (venv_path_w[(sizeof(venv_path_w)/sizeof(wchar_t)) - 1]) {
-        LOG_ERROR("Unable to set Python Program Name using virtual environment. Path to interpreter too long");
+    if (venv_path_w[(sizeof(venv_path_w) / sizeof(wchar_t)) - 1]) {
+        LOG_ERROR(
+            "Unable to set Python Program Name using virtual environment. "
+            "Path to interpreter too long");
         return;
     }
 
-    LOG_INFO("Using Python virtual environment interpreter at %ls", venv_path_w);
+    LOG_INFO("Using Python virtual environment interpreter at %ls",
+             venv_path_w);
     Py_SetProgramName(venv_path_w);
 }
-
 
 /**
  * @name    Initialize the Python interpreter
@@ -108,30 +123,13 @@ static void set_program_name_in_venv(void)
  * Stores the thread state for cocotb in static variable gtstate
  */
 
-extern "C" void embed_init_python(void)
-{
-    FENTER;
-
-#ifndef PYTHON_SO_LIB
-#error "Python version needs passing in with -DPYTHON_SO_VERSION=libpython<ver>.so"
-#else
-#define PY_SO_LIB xstr(PYTHON_SO_LIB)
-#endif
-
-    // Don't initialize Python if already running
-    if (gtstate)
-        return;
-
-    void * lib_handle = utils_dyn_open(PY_SO_LIB);
-    if (!lib_handle) {
-        LOG_ERROR("Failed to find Python shared library\n");
-    }
+extern "C" COCOTB_EXPORT void _embed_init_python(void) {
+    assert(!gtstate);  // this function should not be called twice
 
     to_python();
     set_program_name_in_venv();
-    Py_Initialize();                    /* Initialize the interpreter */
+    Py_Initialize(); /* Initialize the interpreter */
     PySys_SetArgvEx(1, argv, 0);
-    PyEval_InitThreads();               /* Create (and acquire) the interpreter lock */
 
     /* Swap out and return current thread state and release the GIL */
     gtstate = PyEval_SaveThread();
@@ -142,23 +140,24 @@ extern "C" void embed_init_python(void)
     const char *pause = getenv("COCOTB_ATTACH");
     if (pause) {
         unsigned long sleep_time = strtoul(pause, NULL, 10);
-        /* This should check for out-of-range parses which returns ULONG_MAX and sets errno,
-           as well as correct parses that would be sliced by the narrowing cast */
+        /* This should check for out-of-range parses which returns ULONG_MAX and
+           sets errno, as well as correct parses that would be sliced by the
+           narrowing cast */
         if (errno == ERANGE || sleep_time >= UINT_MAX) {
             LOG_ERROR("COCOTB_ATTACH only needs to be set to ~30 seconds");
-            goto out;
+            return;
         }
-        if ((errno != 0 && sleep_time == 0) ||
-            (sleep_time <= 0)) {
-            LOG_ERROR("COCOTB_ATTACH must be set to an integer base 10 or omitted");
-            goto out;
+        if ((errno != 0 && sleep_time == 0) || (sleep_time <= 0)) {
+            LOG_ERROR(
+                "COCOTB_ATTACH must be set to an integer base 10 or omitted");
+            return;
         }
 
-        LOG_ERROR("Waiting for %lu seconds - attach to PID %d with your debugger\n", sleep_time, getpid());
+        LOG_ERROR(
+            "Waiting for %lu seconds - attach to PID %d with your debugger",
+            sleep_time, getpid());
         sleep((unsigned int)sleep_time);
     }
-out:
-    FEXIT;
 }
 
 /**
@@ -174,18 +173,16 @@ out:
  *
  * Cleans up reference counts for Python objects and calls Py_Finalize function.
  */
-extern "C" void embed_sim_cleanup(void)
-{
+extern "C" COCOTB_EXPORT void _embed_sim_cleanup(void) {
     // If initialization fails, this may be called twice:
     // Before the initial callback returns and in the final callback.
     // So we check if Python is still initialized before doing cleanup.
     if (Py_IsInitialized()) {
         to_python();
-        PyGILState_Ensure();    // Don't save state as we are calling Py_Finalize
+        PyGILState_Ensure();  // Don't save state as we are calling Py_Finalize
         Py_DecRef(pEventFn);
         pEventFn = NULL;
-        clear_log_handler();
-        clear_log_filter();
+        py_gpi_logger_finalize();
         Py_Finalize();
         to_simulator();
     }
@@ -202,53 +199,37 @@ extern "C" void embed_sim_cleanup(void)
  *
  * Makes one call to PyGILState_Ensure and one call to PyGILState_Release
  *
- * Loads the Python module called cocotb and calls the _initialise_testbench function
+ * Loads the Python module called cocotb and calls the _initialise_testbench
+ * function
  */
 
-static int get_module_ref(const char *modname, PyObject **mod)
-{
+static int get_module_ref(const char *modname, PyObject **mod) {
     PyObject *pModule = PyImport_ImportModule(modname);
 
     if (pModule == NULL) {
+        // LCOV_EXCL_START
         PyErr_Print();
-        LOG_ERROR("Failed to load Python module \"%s\"\n", modname);
+        LOG_ERROR("Failed to load Python module \"%s\"", modname);
         return -1;
+        // LCOV_EXCL_STOP
     }
 
     *mod = pModule;
     return 0;
 }
 
-extern "C" int embed_sim_init(gpi_sim_info_t *info)
-{
-    FENTER
-
+extern "C" COCOTB_EXPORT int _embed_sim_init(int argc,
+                                             char const *const *argv) {
     int i;
     int ret = 0;
 
     /* Check that we are not already initialized */
-    if (pEventFn)
-        return ret;
-
-    // Find the simulation root
-    const char *dut = getenv("TOPLEVEL");
-
-    if (dut != NULL) {
-        if (!strcmp("", dut)) {
-            /* Empty string passed in, treat as NULL */
-            dut = NULL;
-        } else {
-            // Skip any library component of the toplevel
-            const char *dot = strchr(dut, '.');
-            if (dot != NULL) {
-                dut += (dot - dut + 1);
-            }
-        }
-    }
+    if (pEventFn) return ret;
 
     PyObject *cocotb_module, *cocotb_init, *cocotb_retval;
     PyObject *cocotb_log_module = NULL;
-    PyObject *simlog_func;
+    PyObject *log_func;
+    PyObject *filter_func;
     PyObject *argv_list;
 
     cocotb_module = NULL;
@@ -257,170 +238,110 @@ extern "C" int embed_sim_init(gpi_sim_info_t *info)
     PyGILState_STATE gstate = PyGILState_Ensure();
     to_python();
 
-    if (get_module_ref("cocotb", &cocotb_module))
+    if (get_module_ref("cocotb", &cocotb_module)) {
+        // LCOV_EXCL_START
         goto cleanup;
+        // LCOV_EXCL_STOP
+    }
+
+    LOG_INFO("Python interpreter initialized and cocotb loaded!");
 
     if (get_module_ref("cocotb.log", &cocotb_log_module)) {
+        // LCOV_EXCL_START
         goto cleanup;
+        // LCOV_EXCL_STOP
     }
 
     // Obtain the function to use when logging from C code
-    simlog_func = PyObject_GetAttrString(cocotb_log_module, "_log_from_c");      // New reference
-    if (simlog_func == NULL) {
+    log_func = PyObject_GetAttrString(cocotb_log_module,
+                                      "_log_from_c");  // New reference
+    if (log_func == NULL) {
+        // LCOV_EXCL_START
         PyErr_Print();
         LOG_ERROR("Failed to get the _log_from_c function");
         goto cleanup;
+        // LCOV_EXCL_STOP
     }
-    if (!PyCallable_Check(simlog_func)) {
-        LOG_ERROR("_log_from_c is not callable");
-        Py_DECREF(simlog_func);
-        goto cleanup;
-    }
-
-    set_log_handler(simlog_func);                                       // Note: This function steals a reference to simlog_func.
 
     // Obtain the function to check whether to call log function
-    simlog_func = PyObject_GetAttrString(cocotb_log_module, "_filter_from_c");   // New reference
-    if (simlog_func == NULL) {
+    filter_func = PyObject_GetAttrString(cocotb_log_module,
+                                         "_filter_from_c");  // New reference
+    if (filter_func == NULL) {
+        // LCOV_EXCL_START
+        Py_DECREF(log_func);
         PyErr_Print();
         LOG_ERROR("Failed to get the _filter_from_c method");
         goto cleanup;
-    }
-    if (!PyCallable_Check(simlog_func)) {
-        LOG_ERROR("_filter_from_c is not callable");
-        Py_DECREF(simlog_func);
-        goto cleanup;
+        // LCOV_EXCL_STOP
     }
 
-    set_log_filter(simlog_func);                                        // Note: This function steals a reference to simlog_func.
+    py_gpi_logger_initialize(
+        log_func, filter_func);  // Note: This function steals references to
+                                 // log_func and filter_func.
 
-    // Build argv for cocotb module
-    argv_list = PyList_New(info->argc);                                 // New reference
-    if (argv_list == NULL) {
-        PyErr_Print();
-        LOG_ERROR("Unable to create argv list");
-        goto cleanup;
-    }
-    for (i = 0; i < info->argc; i++) {
-        // Decode, embedding non-decodable bytes using PEP-383. This can only
-        // fail with MemoryError or similar.
-        PyObject *argv_item = PyUnicode_DecodeLocale(info->argv[i], "surrogateescape");  // New reference
-        if (argv_item == NULL) {
-            PyErr_Print();
-            LOG_ERROR("Unable to convert command line argument %d to Unicode string.", i);
-            Py_DECREF(argv_list);
-            goto cleanup;
-        }
-        PyList_SET_ITEM(argv_list, i, argv_item);                       // Note: This function steals the reference to argv_item
-    }
-
-    // Add argv list to cocotb module
-    if (-1 == PyModule_AddObject(cocotb_module, "argv", argv_list)) {   // Note: This function steals the reference to argv_list if successful
-        PyErr_Print();
-        LOG_ERROR("Unable to set argv");
-        Py_DECREF(argv_list);
-        goto cleanup;
-    }
-
-    // Add argc to cocotb module
-    if (-1 == PyModule_AddIntConstant(cocotb_module, "argc", info->argc)) {
-        PyErr_Print();
-        LOG_ERROR("Unable to set argc");
-        goto cleanup;
-    }
-
-    LOG_INFO("Running on %s version %s", info->product, info->version);
-    LOG_INFO("Python interpreter initialized and cocotb loaded!");
-
-    // Now that logging has been set up ok, we initialize the testbench
-    if (-1 == PyModule_AddStringConstant(cocotb_module, "SIM_NAME", info->product)) {
-        PyErr_Print();
-        LOG_ERROR("Unable to set SIM_NAME");
-        goto cleanup;
-    }
-
-    if (-1 == PyModule_AddStringConstant(cocotb_module, "SIM_VERSION", info->version)) {
-        PyErr_Print();
-        LOG_ERROR("Unable to set SIM_VERSION");
-        goto cleanup;
-    }
-
-    // Set language in use as an attribute to cocotb module, or None if not provided
-    {
-        const char *lang = getenv("TOPLEVEL_LANG");
-        PyObject *PyLang;
-        if (lang) {
-            PyLang = PyUnicode_FromString(lang);                            // New reference
-        } else {
-            Py_INCREF(Py_None);
-            PyLang = Py_None;
-        }
-        if (PyLang == NULL) {
-            PyErr_Print();
-            LOG_ERROR("Unable to create Python object for cocotb.LANGUAGE");
-            goto cleanup;
-        }
-        if (-1 == PyObject_SetAttrString(cocotb_module, "LANGUAGE", PyLang)) {
-            PyErr_Print();
-            LOG_ERROR("Unable to set LANGUAGE");
-            Py_DECREF(PyLang);
-            goto cleanup;
-        }
-        Py_DECREF(PyLang);
-    }
-
-    pEventFn = PyObject_GetAttrString(cocotb_module, "_sim_event");     // New reference
+    pEventFn =
+        PyObject_GetAttrString(cocotb_module, "_sim_event");  // New reference
     if (pEventFn == NULL) {
+        // LCOV_EXCL_START
         PyErr_Print();
         LOG_ERROR("Failed to get the _sim_event method");
         goto cleanup;
-    }
-    if (!PyCallable_Check(pEventFn)) {
-        LOG_ERROR("cocotb._sim_event is not callable");
-        Py_DECREF(pEventFn);
-        pEventFn = NULL;
-        goto cleanup;
+        // LCOV_EXCL_STOP
     }
 
-    cocotb_init = PyObject_GetAttrString(cocotb_module, "_initialise_testbench");   // New reference
+    cocotb_init = PyObject_GetAttrString(
+        cocotb_module, "_initialise_testbench");  // New reference
     if (cocotb_init == NULL) {
+        // LCOV_EXCL_START
         PyErr_Print();
         LOG_ERROR("Failed to get the _initialise_testbench method");
         goto cleanup;
-    }
-    if (!PyCallable_Check(cocotb_init)) {
-        LOG_ERROR("cocotb._initialise_testbench is not callable");
-        Py_DECREF(cocotb_init);
-        goto cleanup;
+        // LCOV_EXCL_STOP
     }
 
-    PyObject *dut_arg;
-    if (dut == NULL) {
-        Py_INCREF(Py_None);
-        dut_arg = Py_None;
-    } else {
-        dut_arg = PyUnicode_FromString(dut);                            // New reference
-    }
-    if (dut_arg == NULL) {
+    // Build argv for cocotb module
+    argv_list = PyList_New(argc);  // New reference
+    if (argv_list == NULL) {
+        // LCOV_EXCL_START
         PyErr_Print();
-        LOG_ERROR("Unable to create Python object for dut argument of _initialise_testbench");
+        LOG_ERROR("Unable to create argv list");
         goto cleanup;
+        // LCOV_EXCL_STOP
+    }
+    for (i = 0; i < argc; i++) {
+        // Decode, embedding non-decodable bytes using PEP-383. This can only
+        // fail with MemoryError or similar.
+        PyObject *argv_item = PyUnicode_DecodeLocale(
+            argv[i], "surrogateescape");  // New reference
+        if (argv_item == NULL) {
+            // LCOV_EXCL_START
+            PyErr_Print();
+            LOG_ERROR(
+                "Unable to convert command line argument %d to Unicode string.",
+                i);
+            Py_DECREF(argv_list);
+            goto cleanup;
+            // LCOV_EXCL_STOP
+        }
+        PyList_SET_ITEM(argv_list, i, argv_item);  // Note: This function steals
+                                                   // the reference to argv_item
     }
 
-    cocotb_retval = PyObject_CallFunctionObjArgs(cocotb_init, dut_arg, NULL);
-    Py_DECREF(dut_arg);
+    cocotb_retval = PyObject_CallFunctionObjArgs(cocotb_init, argv_list, NULL);
+    Py_DECREF(argv_list);
     Py_DECREF(cocotb_init);
 
     if (cocotb_retval != NULL) {
         LOG_DEBUG("_initialise_testbench successful");
         Py_DECREF(cocotb_retval);
     } else {
+        // LCOV_EXCL_START
         PyErr_Print();
         LOG_ERROR("cocotb initialization failed - exiting");
         goto cleanup;
+        // LCOV_EXCL_STOP
     }
 
-    FEXIT
     goto ok;
 
 cleanup:
@@ -435,10 +356,9 @@ ok:
     return ret;
 }
 
-extern "C" void embed_sim_event(gpi_event_t level, const char *msg)
-{
-    FENTER
-    /* Indicate to the upper layer a sim event occurred */
+extern "C" COCOTB_EXPORT void _embed_sim_event(gpi_event_t level,
+                                               const char *msg) {
+    /* Indicate to the upper layer that a sim event occurred */
 
     if (pEventFn) {
         PyGILState_STATE gstate;
@@ -449,7 +369,7 @@ extern "C" void embed_sim_event(gpi_event_t level, const char *msg)
             msg = "No message provided";
         }
 
-        PyObject* pValue = PyObject_CallFunction(pEventFn, "ls", level, msg);
+        PyObject *pValue = PyObject_CallFunction(pEventFn, "ls", level, msg);
         if (pValue == NULL) {
             PyErr_Print();
             LOG_ERROR("Passing event to upper layer failed");
@@ -458,6 +378,4 @@ extern "C" void embed_sim_event(gpi_event_t level, const char *msg)
         PyGILState_Release(gstate);
         to_simulator();
     }
-
-    FEXIT
 }

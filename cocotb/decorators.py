@@ -31,11 +31,12 @@ import logging
 import functools
 import inspect
 import os
+import warnings
 
 import cocotb
 from cocotb.log import SimLog
 from cocotb.result import ReturnValue
-from cocotb.utils import get_sim_time, lazy_property, remove_traceback_frames
+from cocotb.utils import get_sim_time, lazy_property, remove_traceback_frames, extract_coro_stack
 from cocotb import outcomes
 
 # Sadly the Python standard logging module is very slow so it's better not to
@@ -59,6 +60,7 @@ def public(f):
         all.append(f.__name__)
     return f
 
+
 public(public)  # Emulate decorating ourself
 
 
@@ -69,6 +71,7 @@ class CoroutineComplete(Exception):
     exception that the scheduler catches and the callbacks are attached
     here.
     """
+
     def __init__(self, text=""):
         Exception.__init__(self, text)
 
@@ -85,12 +88,19 @@ class RunningTask:
         triggers to fire.
     """
 
+    _id_count = 0  # used by the scheduler for debug
+
     def __init__(self, inst):
 
         if inspect.iscoroutine(inst):
             self._natively_awaitable = True
         elif inspect.isgenerator(inst):
             self._natively_awaitable = False
+        elif inspect.iscoroutinefunction(inst):
+            raise TypeError(
+                "Coroutine function {} should be called prior to being "
+                "scheduled."
+                .format(inst))
         elif sys.version_info >= (3, 6) and inspect.isasyncgen(inst):
             raise TypeError(
                 "{} is an async generator, not a coroutine. "
@@ -100,19 +110,21 @@ class RunningTask:
             raise TypeError(
                 "%s isn't a valid coroutine! Did you forget to use the yield keyword?" % inst)
         self._coro = inst
-        self.__name__ = "%s" % inst.__name__
         self._started = False
         self._callbacks = []
         self._outcome = None
+        self._trigger = None
+
+        self._task_id = self._id_count
+        RunningTask._id_count += 1
+        self.__name__ = "Task %d" % self._task_id
+        self.__qualname__ = self.__name__
 
     @lazy_property
     def log(self):
         # Creating a logger is expensive, only do it if we actually plan to
         # log anything
-        if hasattr(self, "__name__"):
-            return SimLog("cocotb.coroutine.%s" % self.__name__, id(self))
-        else:
-            return SimLog("cocotb.coroutine.fail")
+        return SimLog("cocotb.coroutine.%s" % self.__qualname__, id(self))
 
     @property
     def retval(self):
@@ -128,7 +140,48 @@ class RunningTask:
         return self
 
     def __str__(self):
-        return str(self.__name__)
+        return "<{}>".format(self.__name__)
+
+    def _get_coro_stack(self):
+        """Get the coroutine callstack of this Task."""
+        coro_stack = extract_coro_stack(self._coro)
+
+        # Remove Trigger.__await__() from the stack, as it's not really useful
+        if self._natively_awaitable and len(coro_stack):
+            if coro_stack[-1].name == '__await__':
+                coro_stack.pop()
+
+        return coro_stack
+
+    def __repr__(self):
+        coro_stack = self._get_coro_stack()
+
+        if cocotb.scheduler._current_task is self:
+            fmt = "<{name} running coro={coro}()>"
+        elif self._finished:
+            fmt = "<{name} finished coro={coro}() outcome={outcome}>"
+        elif self._trigger is not None:
+            fmt = "<{name} pending coro={coro}() trigger={trigger}>"
+        elif not self._started:
+            fmt = "<{name} created coro={coro}()>"
+        else:
+            fmt = "<{name} adding coro={coro}()>"
+
+        try:
+            coro_name = coro_stack[-1].name
+        # coro_stack may be empty if:
+        # - exhausted generator
+        # - finished coroutine
+        except IndexError:
+            coro_name = self._coro.__name__
+
+        repr_string = fmt.format(
+            name=self.__name__,
+            coro=coro_name,
+            trigger=self._trigger,
+            outcome=self._outcome
+        )
+        return repr_string
 
     def _advance(self, outcome):
         """Advance to the next yield in this coroutine.
@@ -175,7 +228,7 @@ class RunningTask:
             self.log.debug("kill() called on coroutine")
         # todo: probably better to throw an exception for anyone waiting on the coroutine
         self._outcome = outcomes.Value(None)
-        cocotb.scheduler.unschedule(self)
+        cocotb.scheduler._unschedule(self)
 
     def join(self):
         """Return a trigger that will fire when the wrapped coroutine exits."""
@@ -208,6 +261,7 @@ class RunningCoroutine(RunningTask):
 
     All this class does is provide some extra attributes.
     """
+
     def __init__(self, inst, parent):
         RunningTask.__init__(self, inst)
         self._parent = parent
@@ -236,7 +290,7 @@ class RunningTest(RunningCoroutine):
     def __init__(self, inst, parent):
         self.error_messages = []
         RunningCoroutine.__init__(self, inst, parent)
-        self.log = SimLog("cocotb.test.%s" % self.__name__, id(self))
+        self.log = SimLog("cocotb.test.%s" % inst.__qualname__, id(self))
         self.started = False
         self.start_time = 0
         self.start_sim_time = 0
@@ -244,10 +298,14 @@ class RunningTest(RunningCoroutine):
         self.expect_error = parent.expect_error
         self.skip = parent.skip
         self.stage = parent.stage
-        self._id = parent._id
+        self.__name__ = "Test %s" % inst.__name__
+        self.__qualname__ = "Test %s" % inst.__qualname__
 
         # make sure not to create a circular reference here
         self.handler = RunningTest.ErrorLogHandler(self.error_messages.append)
+
+    def __str__(self):
+        return "<{}>".format(self.__name__)
 
     def _advance(self, outcome):
         if not self.started:
@@ -269,12 +327,15 @@ class RunningTest(RunningCoroutine):
         `exc` is the exception that the test should report as its reason for
         aborting.
         """
-        assert self._outcome is None
+        if self._outcome is not None:
+            # imported here to avoid circular imports
+            from cocotb.scheduler import InternalError
+            raise InternalError("Outcome already has a value, but is being set again.")
         outcome = outcomes.Error(exc)
         if _debug:
             self.log.debug("outcome forced to {}".format(outcome))
         self._outcome = outcome
-        cocotb.scheduler.unschedule(self)
+        cocotb.scheduler._unschedule(self)
 
     def sort_name(self):
         if self.stage is None:
@@ -295,12 +356,11 @@ class coroutine:
 
     def __init__(self, func):
         self._func = func
-        self.__name__ = self._func.__name__
         functools.update_wrapper(self, func)
 
     @lazy_property
     def log(self):
-        return SimLog("cocotb.coroutine.%s" % self._func.__name__, id(self))
+        return SimLog("cocotb.coroutine.%s" % self._func.__qualname__, id(self))
 
     def __call__(self, *args, **kwargs):
         return RunningCoroutine(self._func(*args, **kwargs), self)
@@ -314,7 +374,7 @@ class coroutine:
         return self
 
     def __str__(self):
-        return str(self._func.__name__)
+        return str(self._func.__qualname__)
 
 
 @public
@@ -326,20 +386,22 @@ class function:
     in other words, to internally block while externally
     appear to yield.
     """
+
     def __init__(self, func):
         self._coro = cocotb.coroutine(func)
 
     @lazy_property
     def log(self):
-        return SimLog("cocotb.function.%s" % self._coro.__name__, id(self))
+        return SimLog("cocotb.function.%s" % self._coro.__qualname__, id(self))
 
     def __call__(self, *args, **kwargs):
-        return cocotb.scheduler.queue_function(self._coro(*args, **kwargs))
+        return cocotb.scheduler._queue_function(self._coro(*args, **kwargs))
 
     def __get__(self, obj, owner=None):
         """Permit the decorator to be used on class methods
             and standalone functions"""
         return type(self)(self._coro._func.__get__(obj, owner))
+
 
 @public
 class external:
@@ -350,12 +412,13 @@ class external:
     called.
     Scope for this to be streamlined to a queue in future.
     """
+
     def __init__(self, func):
         self._func = func
-        self._log = SimLog("cocotb.external.%s" % self._func.__name__, id(self))
+        self._log = SimLog("cocotb.external.%s" % self._func.__qualname__, id(self))
 
     def __call__(self, *args, **kwargs):
-        return cocotb.scheduler.run_in_executor(self._func, *args, **kwargs)
+        return cocotb.scheduler._run_in_executor(self._func, *args, **kwargs)
 
     def __get__(self, obj, owner=None):
         """Permit the decorator to be used on class methods
@@ -388,14 +451,27 @@ class _decorator_helper(type):
 
 @public
 class hook(coroutine, metaclass=_decorator_helper):
-    """Decorator to mark a function as a hook for cocotb.
+    r"""
+    Decorator to mark a function as a hook for cocotb.
 
     Used as ``@cocotb.hook()``.
 
     All hooks are run at the beginning of a cocotb test suite, prior to any
-    test code being run."""
+    test code being run.
+
+    .. deprecated:: 1.5
+        Hooks are deprecated.
+        Their functionality can be replaced with module-level Python code,
+        higher-priority tests using the ``stage`` argument to :func:`cocotb.test`\ s,
+        or custom decorators which perform work before and after the tests
+        they decorate.
+    """
+
     def __init__(self, f):
         super(hook, self).__init__(f)
+        warnings.warn(
+            "Hooks have been deprecated. See the documentation for suggestions on alternatives.",
+            DeprecationWarning, stacklevel=2)
         self.im_hook = True
         self.name = self._func.__name__
 
@@ -413,19 +489,29 @@ class test(coroutine, metaclass=_decorator_helper):
     Used as ``@cocotb.test(...)``.
 
     Args:
-        timeout_time (int, optional):
-            Value representing simulation timeout.
+        timeout_time (numbers.Real or decimal.Decimal, optional):
+            Simulation time duration before timeout occurs.
 
             .. versionadded:: 1.3
+
+            .. note::
+                Test timeout is intended for protection against deadlock.
+                Users should use :class:`~cocotb.triggers.with_timeout` if they require a
+                more general-purpose timeout mechanism.
+
         timeout_unit (str, optional):
-            Unit of timeout value, see :class:`~cocotb.triggers.Timer` for more info.
+            Units of timeout_time, accepts any units that :class:`~cocotb.triggers.Timer` does.
 
             .. versionadded:: 1.3
+
+            .. deprecated:: 1.5
+                Using None as the the *timeout_unit* argument is deprecated, use ``'step'`` instead.
+
         expect_fail (bool, optional):
             Don't mark the result as a failure if the test fails.
-        expect_error (bool or exception type or tuple of exception types, optional):
-            If ``True``, consider this test passing if it raises *any* :class:`Exception`, and failing if it does not.
-            If given an exception type or tuple of exception types, catching *only* a listed exception type is considered passing.
+
+        expect_error (exception type or tuple of exception types, optional):
+            Mark the result as a pass only if one of the exception types is raised in the test.
             This is primarily for cocotb internal regression use for when a simulator error is expected.
 
             Users are encouraged to use the following idiom instead::
@@ -441,18 +527,30 @@ class test(coroutine, metaclass=_decorator_helper):
 
             .. versionchanged:: 1.3
                 Specific exception types can be expected
+
+            .. deprecated:: 1.5
+                Passing a :class:`bool` value is now deprecated.
+                Pass a specific :class:`Exception` or a tuple of Exceptions instead.
+
         skip (bool, optional):
-            Don't execute this test as part of the regression.
+            Don't execute this test as part of the regression. Test can still be run
+            manually by setting :make:var:`TESTCASE`.
+
         stage (int, optional)
             Order tests logically into stages, where multiple tests can share a stage.
     """
 
     _id_count = 0  # used by the RegressionManager to sort tests in definition order
 
-    def __init__(self, f, timeout_time=None, timeout_unit=None,
-                 expect_fail=False, expect_error=False,
+    def __init__(self, f, timeout_time=None, timeout_unit="step",
+                 expect_fail=False, expect_error=(),
                  skip=False, stage=None):
 
+        if timeout_unit is None:
+            warnings.warn(
+                'Using timeout_unit=None is deprecated, use timeout_unit="step" instead.',
+                DeprecationWarning, stacklevel=2)
+            timeout_unit="step"  # don't propagate deprecated value
         self._id = self._id_count
         type(self)._id_count += 1
 
@@ -476,6 +574,11 @@ class test(coroutine, metaclass=_decorator_helper):
         self.timeout_time = timeout_time
         self.timeout_unit = timeout_unit
         self.expect_fail = expect_fail
+        if isinstance(expect_error, bool):
+            warnings.warn(
+                "Passing bool values to `except_error` option of `cocotb.test` is deprecated. "
+                "Pass a specific Exception type instead",
+                DeprecationWarning, stacklevel=2)
         if expect_error is True:
             expect_error = (Exception,)
         elif expect_error is False:

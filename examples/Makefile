@@ -28,12 +28,9 @@
 ###############################################################################
 
 EXAMPLES := adder/tests \
-            axi_lite_slave/tests \
-            dff/tests \
-            endian_swapper/tests \
-            mean/tests \
+            simple_dff \
+            matrix_multiplier/tests \
             mixed_language/tests
-# requires root permissions: ping_tun_tap/tests
 
 .PHONY: $(EXAMPLES)
 

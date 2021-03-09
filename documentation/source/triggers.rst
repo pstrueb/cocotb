@@ -5,7 +5,7 @@ Triggers
 Triggers are used to indicate when the cocotb scheduler should resume coroutine execution.
 To use a trigger, a coroutine should :keyword:`await` it.
 This will cause execution of the current coroutine to pause.
-When the trigger fires, execution of the paused coroutine will resume::
+When the trigger fires, execution of the paused coroutine will resume:
 
 .. code-block:: python3
 
@@ -22,11 +22,11 @@ Simulator Triggers
 Signals
 -------
 
-.. autoclass:: cocotb.triggers.Edge
+.. autoclass:: cocotb.triggers.Edge(signal)
 
-.. autoclass:: cocotb.triggers.RisingEdge
+.. autoclass:: cocotb.triggers.RisingEdge(signal)
 
-.. autoclass:: cocotb.triggers.FallingEdge
+.. autoclass:: cocotb.triggers.FallingEdge(signal)
 
 .. autoclass:: cocotb.triggers.ClockCycles
 
@@ -36,11 +36,11 @@ Timing
 
 .. autoclass:: cocotb.triggers.Timer
 
-.. autoclass:: cocotb.triggers.ReadOnly
+.. autoclass:: cocotb.triggers.ReadOnly()
 
-.. autoclass:: cocotb.triggers.ReadWrite
+.. autoclass:: cocotb.triggers.ReadWrite()
 
-.. autoclass:: cocotb.triggers.NextTimeStep
+.. autoclass:: cocotb.triggers.NextTimeStep()
 
 
 Python Triggers
@@ -50,7 +50,7 @@ Python Triggers
 
 .. autoclass:: cocotb.triggers.First
 
-.. autoclass:: cocotb.triggers.Join
+.. autoclass:: cocotb.triggers.Join(coroutine)
     :members: retval
 
 

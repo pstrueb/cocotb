@@ -1,19 +1,15 @@
 # Python dependencies to build the documentation
 
-# Pinned below 3 until https://github.com/sphinx-contrib/domaintools/pull/9 is
-# merged and released.
-Sphinx~=2.1
-
-# 4.15 depends on sphinx 3.0.0, but for some reason ReadTheDocs tries to install
-# it anyway.
-breathe < 4.15
-
-# other dependencies
+# != 3.5.0: https://github.com/sphinx-doc/sphinx/issues/8880
+Sphinx ~= 3.1, != 3.5.0
+breathe
 sphinx-rtd-theme
 cairosvg
 sphinxcontrib-makedomain
-sphinxcontrib-spelling
+sphinxcontrib-spelling >= 5.3.0
 pyenchant
 sphinx-issues
 sphinx-argparse
 towncrier
+IPython
+sphinx-tabs

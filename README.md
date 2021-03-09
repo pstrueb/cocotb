@@ -1,13 +1,10 @@
-**Your input is needed!** Please help out by taking 10 minutes to fill out this year's cocotb user survey. This survey gives the development community important feedback to steer the future of cocotb into the right direction for your use case.
-[**Take the cocotb user survey now**](https://docs.google.com/forms/d/e/1FAIpQLSfD36PldzszbuZjysss3AMvxkf6XCtSbDTVh9qVNNYDaHTZ_w/viewform).
-
----
-
 **cocotb** is a coroutine based cosimulation library for writing VHDL and Verilog testbenches in Python.
 
 [![Documentation Status](https://readthedocs.org/projects/cocotb/badge/?version=latest)](https://docs.cocotb.org/en/latest/)
-[![Build Status](https://travis-ci.org/cocotb/cocotb.svg?branch=master)](https://travis-ci.org/cocotb/cocotb)
+[![Build Status](https://github.com/cocotb/cocotb/workflows/Regression%20Tests/badge.svg)](https://github.com/cocotb/cocotb/actions?query=workflow%3A%22Regression+Tests%22)
 [![PyPI](https://img.shields.io/pypi/dm/cocotb.svg?label=PyPI%20downloads)](https://pypi.org/project/cocotb/)
+[![Gitpod Ready-to-Code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/cocotb/cocotb)
+[![codecov](https://codecov.io/gh/cocotb/cocotb/branch/master/graph/badge.svg)](https://codecov.io/gh/cocotb/cocotb)
 
 * Read the [documentation](https://docs.cocotb.org)
 * Get involved:
@@ -17,11 +14,14 @@
 
 ## Installation
 
-Cocotb requires:
+The current stable version of cocotb requires:
 
 - Python 3.5+
-- A C++ compiler
-- An HDL simulator (such as [Icarus Verilog](http://iverilog.icarus.com/))
+- A C++11 compiler
+- An HDL simulator (such as [Icarus Verilog](https://docs.cocotb.org/en/stable/simulator_support.html#icarus-verilog),
+[Verilator](https://docs.cocotb.org/en/stable/simulator_support.html#verilator),
+[GHDL](https://docs.cocotb.org/en/stable/simulator_support.html#ghdl) or
+[other simulator](https://docs.cocotb.org/en/stable/simulator_support.html))
 
 After installing these dependencies, the latest stable version of cocotb can be installed with pip.
 
@@ -29,13 +29,21 @@ After installing these dependencies, the latest stable version of cocotb can be 
 pip install cocotb
 ```
 
-For more details, including how to install a development version of cocotb, see [the documentation](https://docs.cocotb.org/en/latest/quickstart.html#pre-requisites).
+For more details on installation, including prerequisites,
+see [the documentation](https://docs.cocotb.org/en/stable/install.html).
+
+For details on how to install the *development* version of cocotb,
+see [the preliminary documentation of the future release](https://docs.cocotb.org/en/latest/install_devel.html#install-devel).
+
+**!!! Bus and Testbenching Components !!!**
+The reusable bus interfaces and testbenching components have recently been moved to the [cocotb-bus](https://github.com/cocotb/cocotb-bus) package.
+You can easily install these at the same time as cocotb by adding the `bus` extra install: `pip install cocotb[bus]`.
 
 ## Usage
 
 As a first trivial introduction to cocotb, the following example "tests" a flip-flop.
 
-First, we need a hardware design which we can test. For this example, create a file `dff.sv` with SystemVerilog code for a simple [D flip-flop](https://en.wikipedia.org/wiki/Flip-flop_(electronics)#D_flip-flop). You could also use any other language a [cocotb-supported simulator](https://docs.cocotb.org/en/latest/introduction.html) understands, e.g. VHDL.
+First, we need a hardware design which we can test. For this example, create a file `dff.sv` with SystemVerilog code for a simple [D flip-flop](https://en.wikipedia.org/wiki/Flip-flop_(electronics)#D_flip-flop). You could also use any other language a [cocotb-supported simulator](https://docs.cocotb.org/en/stable/simulator_support.html) understands, e.g. VHDL.
 
 ```systemverilog
 // dff.sv
@@ -75,7 +83,7 @@ async def test_dff_simple(dut):
         val = random.randint(0, 1)
         dut.d <= val  # Assign the random value val to the input port d
         await FallingEdge(dut.clk)
-        assert dut.q == val, "output q was incorrect on the {}th cycle".format(i)
+        assert dut.q.value == val, "output q was incorrect on the {}th cycle".format(i)
 ```
 
 A simple Makefile:
@@ -88,7 +96,6 @@ VERILOG_SOURCES = $(shell pwd)/dff.sv
 TOPLEVEL = dff
 MODULE = test_dff
 
-include $(shell cocotb-config --makefiles)/Makefile.inc
 include $(shell cocotb-config --makefiles)/Makefile.sim
 ```
 
@@ -100,14 +107,15 @@ make SIM=icarus
 
 [![asciicast](https://asciinema.org/a/317220.svg)](https://asciinema.org/a/317220)
 
-For more information please see the [cocotb documentation](https://docs.cocotb.org/) and the [wiki](https://github.com/cocotb/cocotb/wiki).
+For more information please see the [cocotb documentation](https://docs.cocotb.org/)
+and [our wiki](https://github.com/cocotb/cocotb/wiki).
 
 ## Tutorials, examples and related projects
 
-* [Endian Swapper tutorial](https://docs.cocotb.org/en/latest/endian_swapper.html)
-* [Ping using TUN/TAP tutorial](https://docs.cocotb.org/en/latest/ping_tun_tap.html)
-* [Cocotb based USB 1.1 test suite for FPGA IP, with testbenches for a variety of open source USB cores](https://github.com/antmicro/usb-test-suite-build)
-* [Functional Coverage and Constrained Randomization Extensions for Cocotb](https://github.com/mciepluc/cocotb-coverage)
-* [UVM 1.2 port to Python](https://github.com/tpoikela/uvm-python)
-
-For more related resources please check the [wiki](https://github.com/cocotb/cocotb/wiki/Further-Resources) and the [list of projects depending on cocotb](https://github.com/cocotb/cocotb/network/dependents).
+* the tutorial section [in the official documentation](https://docs.cocotb.org/)
+* [cocotb-bus](https://github.com/cocotb/cocotb-bus) for pre-packaged testbenching tools and reusable bus interfaces.
+* [cocotb-based USB 1.1 test suite](https://github.com/antmicro/usb-test-suite-build) for FPGA IP, with testbenches for a variety of open source USB cores
+* [`cocotb-coverage`](https://github.com/mciepluc/cocotb-coverage), an extension for Functional Coverage and Constrained Randomization
+* [`uvm-python`](https://github.com/tpoikela/uvm-python), an almost 1:1 port of UVM 1.2 to Python
+* our wiki [on extension modules](https://github.com/cocotb/cocotb/wiki/Further-Resources#extension-modules-cocotbext)
+* the list of [GitHub projects depending on cocotb](https://github.com/cocotb/cocotb/network/dependents)

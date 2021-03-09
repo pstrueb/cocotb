@@ -7,6 +7,13 @@
 # C objects
 *.o
 
+# Python and C++ code coverage
+.coverage
+.coverage.cocotb
+*.gcno
+*.gcda
+*.gcov
+
 # Packaging
 *.egg
 *.egg-info
@@ -20,10 +27,14 @@ develop-eggs
 .installed.cfg
 __pycache__
 .tox
+.eggs
 
 # Vim tmp files
 *.swp
 *~
+
+# VSCode project files
+.vscode/
 
 # Emacs tmp files
 \#*\#
@@ -35,6 +46,8 @@ __pycache__
 
 # Waveforms
 *.vcd
+*.fst
+*.fst.hier
 
 # Results
 results.xml
@@ -88,3 +101,7 @@ tests/test_cases/*/compile
 examples/*/tests/library.cfg
 examples/*/tests/dataset.asdb
 examples/*/tests/compile
+
+# Tachyon DA CVC
+tests/test_cases/*/verilog.log
+examples/*/tests/verilog.log

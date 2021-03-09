@@ -6,66 +6,61 @@ import logging
 import cocotb
 
 from cocotb.clock import Clock
-from cocotb.triggers import Timer, RisingEdge
+from cocotb.triggers import Timer
 from cocotb.result import TestError, TestFailure
 from cocotb.handle import HierarchyObject, HierarchyArrayObject, ModifiableObject, NonHierarchyIndexableObject, ConstantObject
 
+
 def _check_type(tlog, hdl, expected):
-    if not isinstance(hdl, expected):
-        raise TestFailure(">{0!r} ({1})< should be >{2}<".format(hdl, hdl._type, expected))
-    else:
-        tlog.info("   Found %r (%s) with length=%d", hdl, hdl._type, len(hdl))
+    assert isinstance(hdl, expected), ">{0!r} ({1})< should be >{2}<".format(hdl, hdl._type, expected)
+    tlog.info("   Found %r (%s) with length=%d", hdl, hdl._type, len(hdl))
+
 
 def _check_int(tlog, hdl, expected):
-    if int(hdl) != expected:
-        raise TestFailure("{2!r}: Expected >{0}< but got >{1}<".format(expected, int(hdl), hdl))
-    else:
-        tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, int(hdl)))
+    assert int(hdl) == expected, "{2!r}: Expected >{0}< but got >{1}<".format(expected, int(hdl), hdl)
+    tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, int(hdl)))
+
 
 def _check_logic(tlog, hdl, expected):
-    if int(hdl) != expected:
-        raise TestFailure("{2!r}: Expected >0x{0:X}< but got >0x{1:X}<".format(expected, int(hdl), hdl))
-    else:
-        tlog.info("   Found {0!r} ({1}) with value=0x{2:X}".format(hdl, hdl._type, int(hdl)))
+    assert int(hdl) == expected, "{2!r}: Expected >0x{0:X}< but got >0x{1:X}<".format(expected, int(hdl), hdl)
+    tlog.info("   Found {0!r} ({1}) with value=0x{2:X}".format(hdl, hdl._type, int(hdl)))
+
 
 def _check_str(tlog, hdl, expected):
-    if str(hdl) != expected:
-        raise TestFailure("{2!r}: Expected >{0}< but got >{1}<".format(expected, str(hdl), hdl))
-    else:
-        tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, str(hdl)))
+    assert hdl.value == expected, "{2!r}: Expected >{0}< but got >{1}<".format(expected, str(hdl), hdl)
+    tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, str(hdl)))
+
 
 def _check_real(tlog, hdl, expected):
-    if float(hdl) != expected:
-        raise TestFailure("{2!r}: Expected >{0}< but got >{1}<".format(expected, float(hdl), hdl))
-    else:
-        tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, float(hdl)))
+    assert float(hdl) == expected, "{2!r}: Expected >{0}< but got >{1}<".format(expected, float(hdl), hdl)
+    tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, float(hdl)))
+
 
 def _check_value(tlog, hdl, expected):
-    if hdl.value != expected:
-        raise TestFailure("{2!r}: Expected >{0}< but got >{1}<".format(expected, hdl.value, hdl))
-    else:
-        tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, hdl.value))
+    assert hdl.value == expected, "{2!r}: Expected >{0}< but got >{1}<".format(expected, hdl.value, hdl)
+    tlog.info("   Found {0!r} ({1}) with value={2}".format(hdl, hdl._type, hdl.value))
+
 
 # NOTE: simulator-specific handling is done in this test itself, not via expect_error in the decorator
 @cocotb.test()
-def test_read_write(dut):
+async def test_read_write(dut):
     """Test handle inheritance"""
     tlog = logging.getLogger("cocotb.test")
 
-    cocotb.fork(Clock(dut.clk, 1000).start())
+    cocotb.fork(Clock(dut.clk, 10, "ns").start())
 
-    yield Timer(1000)
+    await Timer(10, "ns")
 
     tlog.info("Checking Generics/Parameters:")
     _check_logic(tlog, dut.param_logic    , 1)
     _check_logic(tlog, dut.param_logic_vec, 0xDA)
 
     if cocotb.LANGUAGE in ["vhdl"]:
-        _check_int (tlog, dut.param_bool, 1)
-        _check_int (tlog, dut.param_int , 6)
+        _check_int(tlog, dut.param_bool, 1)
+        _check_int(tlog, dut.param_int , 6)
         _check_real(tlog, dut.param_real, 3.14)
-        _check_int (tlog, dut.param_char, ord('p'))
-        _check_str (tlog, dut.param_str , "ARRAYMOD")
+        _check_int(tlog, dut.param_char, ord('p'))
+        _check_str(tlog, dut.param_str , b"ARRAYMOD")
 
         if not cocotb.SIM_NAME.lower().startswith(("riviera")):
             _check_logic(tlog, dut.param_rec.a        , 0)
@@ -86,11 +81,11 @@ def test_read_write(dut):
     _check_logic(tlog, dut.const_logic_vec, 0x3D)
 
     if cocotb.LANGUAGE in ["vhdl"]:
-        _check_int (tlog, dut.const_bool, 0)
-        _check_int (tlog, dut.const_int , 12)
+        _check_int(tlog, dut.const_bool, 0)
+        _check_int(tlog, dut.const_int , 12)
         _check_real(tlog, dut.const_real, 6.28)
-        _check_int (tlog, dut.const_char, ord('c'))
-        _check_str (tlog, dut.const_str , "MODARRAY")
+        _check_int(tlog, dut.const_char, ord('c'))
+        _check_str(tlog, dut.const_str , b"MODARRAY")
 
         if not cocotb.SIM_NAME.lower().startswith(("riviera")):
             _check_logic(tlog, dut.const_rec.a        , 1)
@@ -108,7 +103,7 @@ def test_read_write(dut):
 
     dut.select_in         = 2
 
-    yield Timer(1000)
+    await Timer(10, "ns")
 
     tlog.info("Writing the signals!!!")
     dut.sig_logic         = 1
@@ -140,7 +135,7 @@ def test_read_write(dut):
         dut.sig_cmplx[1].b[1] = 0xEF
         dut.sig_cmplx[1].b[2] = 0x55
 
-    yield Timer(1000)
+    await Timer(10, "ns")
 
     tlog.info("Checking writes:")
     _check_logic(tlog, dut.port_logic_out    , 1)
@@ -152,11 +147,11 @@ def test_read_write(dut):
     _check_logic(tlog, dut.sig_t4[3][7], 0xCC)
 
     if cocotb.LANGUAGE in ["vhdl"]:
-        _check_int (tlog, dut.port_bool_out, 1)
-        _check_int (tlog, dut.port_int_out , 5000)
+        _check_int(tlog, dut.port_bool_out, 1)
+        _check_int(tlog, dut.port_int_out , 5000)
         _check_real(tlog, dut.port_real_out, 22.54)
-        _check_int (tlog, dut.port_char_out, ord('Z'))
-        _check_str (tlog, dut.port_str_out , "Testing")
+        _check_int(tlog, dut.port_char_out, ord('Z'))
+        _check_str(tlog, dut.port_str_out , b"Testing")
 
         _check_logic(tlog, dut.port_rec_out.a        , 1)
         _check_logic(tlog, dut.port_rec_out.b[0]     , 0x01)
@@ -184,7 +179,7 @@ def test_read_write(dut):
         dut.sig_rec.b[1][7]      = 1
         dut.sig_cmplx[1].b[1][0] = 0
 
-    yield Timer(1000)
+    await Timer(10, "ns")
 
     tlog.info("Checking writes (2):")
     _check_logic(tlog, dut.port_logic_vec_out, 0xC8)
@@ -195,17 +190,16 @@ def test_read_write(dut):
         _check_logic(tlog, dut.sig_t6[0][2][7], 0)
 
     if cocotb.LANGUAGE in ["vhdl"]:
-        _check_str(tlog, dut.port_str_out, "TEsting")  # the uppercase "E" from a few lines before
+        _check_str(tlog, dut.port_str_out, b"TEsting")  # the uppercase "E" from a few lines before
 
         _check_logic(tlog, dut.port_rec_out.b[1]     , 0xA3)
         _check_logic(tlog, dut.port_cmplx_out[1].b[1], 0xEE)
 
+
 @cocotb.test()
-def test_gen_loop(dut):
+async def test_gen_loop(dut):
     """Test accessing Generate Loops"""
     tlog = logging.getLogger("cocotb.test")
-
-    yield Timer(1000)
 
     asc_gen_20  = dut.asc_gen[20]
     desc_gen    = dut.desc_gen
@@ -238,9 +232,10 @@ def test_gen_loop(dut):
     for gens in dut.asc_gen:
         tlog.info("Iterate access found %s", gens)
 
+
 @cocotb.test()
-def test_discover_all(dut):
-    """Discover everything in the DUT:
+async def test_discover_all(dut):
+    r"""Discover everything in the DUT:
           dut
                  TYPE    CNT  NOTES                                                  EXCEPTIONS
              parameters: 7/2 (base types)                                            (VHDL/Verilog)
@@ -314,25 +309,25 @@ def test_discover_all(dut):
 
     tlog = logging.getLogger("cocotb.test")
 
-    yield Timer(1000)
+    await Timer(10, "ns")
 
     # Need to clear sub_handles so won't attempt to iterate over handles like sig_rec and sig_rec_array
     #
     # DO NOT REMOVE.  Aldec cannot iterate over the complex records due to bugs in the VPI interface.
     if (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")) and
-        cocotb.SIM_VERSION.startswith(("2016.02"))) :
+       cocotb.SIM_VERSION.startswith(("2016.02"))) :
         if len(dut._sub_handles) != 0:
             dut._sub_handles = {}
 
     # Modelsim/Questa VPI will not find a vpiStructVar from vpiModule so we set a dummy variable
     # to ensure the handle is in the dut "sub_handles" for iterating
     #
-    # DO NOT ADD FOR ALDEC.  Does not iterate over properly
+    # DO NOT ADD FOR ALDEC.  Older Versions do not iterate over properly
     if cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("modelsim", "ncsim", "xmsim")):
         dummy = dut.sig_rec
         dummy = dut.port_rec_out
 
-    # Riviera-Pro's VHPI implementation does not fine signal declarations when iterating
+    # Riviera-Pro's VHPI implementation does not find signal declarations when iterating
     if cocotb.LANGUAGE in ["vhdl"] and cocotb.SIM_NAME.lower().startswith(("riviera")):
         for hdl in dut.asc_gen:
             dummy = hdl.sig
@@ -340,18 +335,24 @@ def test_discover_all(dut):
             dummy = hdl.sig
 
     if cocotb.LANGUAGE in ["vhdl"] and cocotb.SIM_NAME.lower().startswith(("riviera")):
-        pass_total = 818
+        pass_total = 571
     elif cocotb.LANGUAGE in ["vhdl"]:
         pass_total = 856
     elif cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")):
+        # Numbers for versions before 2019.10 may be outdated
         if cocotb.SIM_VERSION.startswith(("2017.10.61")):
             pass_total = 803
         elif cocotb.SIM_VERSION.startswith(("2016.06", "2016.10", "2017.02")):
             pass_total = 813
         elif cocotb.SIM_VERSION.startswith(("2016.02")):
             pass_total = 947
+        elif cocotb.SIM_VERSION.startswith(("2019.10", "2020.")):
+            # vpiVariables finds port_rec_out and sig_rec
+            pass_total = 1006
         else:
             pass_total = 1038
+    elif cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("chronologic simulation vcs")):
+        pass_total = 606
     else:
         pass_total = 1078
 
@@ -370,13 +371,12 @@ def test_discover_all(dut):
     if total != pass_total:
         raise TestFailure("Expected {0} objects but found {1}".format(pass_total, total))
 
+
 @cocotb.test(skip=(cocotb.LANGUAGE in ["verilog"] or cocotb.SIM_NAME.lower().startswith(("riviera"))))
-def test_direct_constant_indexing(dut):
+async def test_direct_constant_indexing(dut):
     """Test directly accessing constant/parameter data in arrays, i.e. not iterating"""
 
     tlog = logging.getLogger("cocotb.test")
-
-    yield Timer(2000)
 
     tlog.info("Checking Types of complex array structures in constants/parameters.")
     _check_type(tlog, dut.param_rec, HierarchyObject)
@@ -403,24 +403,24 @@ def test_direct_constant_indexing(dut):
 
 
 @cocotb.test()
-def test_direct_signal_indexing(dut):
+async def test_direct_signal_indexing(dut):
     """Test directly accessing signal/net data in arrays, i.e. not iterating"""
 
     tlog = logging.getLogger("cocotb.test")
 
-    cocotb.fork(Clock(dut.clk, 1000).start())
+    cocotb.fork(Clock(dut.clk, 10, "ns").start())
 
     dut.port_desc_in <= 0
     dut.port_asc_in  <= 0
     dut.port_ofst_in <= 0
 
-    yield Timer(2000)
+    await Timer(20, "ns")
 
     dut.port_desc_in[2] <= 1
     dut.port_asc_in[2]  <= 1
     dut.port_ofst_in[2] <= 1
 
-    yield Timer(2000)
+    await Timer(20, "ns")
 
     tlog.info("Checking bit mapping from input to generate loops.")
     if int(dut.desc_gen[2].sig) != 1:
@@ -475,7 +475,6 @@ def test_direct_signal_indexing(dut):
         _check_type(tlog, dut.sig_t8[1], NonHierarchyIndexableObject)
         _check_type(tlog, dut.sig_t8[0][3], ModifiableObject)
 
-
     # Riviera has a bug and finds dut.sig_cmplx[1], but the type returned is a vpiBitVar
     # only true for version 2016.02
     if not (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")) and
@@ -498,14 +497,12 @@ def test_direct_signal_indexing(dut):
         _check_type(tlog, dut.sig_rec.b[1], ModifiableObject)
         _check_type(tlog, dut.sig_rec.b[1][2], ModifiableObject)
 
+
 @cocotb.test(skip=(cocotb.LANGUAGE in ["verilog"]))
-def test_extended_identifiers(dut):
+async def test_extended_identifiers(dut):
     """Test accessing extended identifiers"""
 
     tlog = logging.getLogger("cocotb.test")
-
-    yield Timer(2000)
-
     tlog.info("Checking extended identifiers.")
     _check_type(tlog, dut._id("\\ext_id\\", extended=False), ModifiableObject)
     _check_type(tlog, dut._id("!"), ModifiableObject)

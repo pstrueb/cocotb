@@ -47,9 +47,9 @@ A bus driver is the "active" part, it drives the signals that make up the bus to
 A bus monitor is the "passive" part, it observes signal changes on the bus and assigns meaning to them.
 Monitors can also check the bus behavior against a standard to ensure no invalid states are being observed.
 
-The signals which make up the bus should be grouped in a class inheriting from :any:`cocotb.bus.Bus`.
-Bus drivers should inherit from the :any:`cocotb.drivers.BusDriver` class.
-Bus monitors should inherit from the :any:`cocotb.monitors.BusMonitor` class.
+The signals which make up the bus should be grouped in a class inheriting from :any:`cocotb_bus.bus.Bus`.
+Bus drivers should inherit from the :any:`cocotb_bus.drivers.BusDriver` class.
+Bus monitors should inherit from the :any:`cocotb_bus.monitors.BusMonitor` class.
 
 Packaging extensions
 ====================
@@ -80,7 +80,7 @@ All packaging metadata goes into :file:`setup.py`.
         version = '0.1',
         packages = find_namespace_packages(include=['cocotbext.*']),
         install_requires = ['cocotb'],
-        python_requires = '>=3.5',
+        python_requires = '>=3.6',
         classifiers = [
           "Programming Language :: Python :: 3",
           "Operating System :: OS Independent",
@@ -111,3 +111,12 @@ Code hosting
 The source code of cocotb extensions can be hosted anywhere.
 If authors wish to do so, extensions can also be hosted on GitHub in the `cocotb GitHub organization <https://github.com/cocotb>`_ (e.g. ``github.com/cocotb/cocotbext-EXTNAME``).
 Please file a `GitHub issue in the cocotb repository <https://github.com/cocotb/cocotb/issues>`_ if you'd like to discuss that.
+
+Note that hosting extensions within the cocotb organization is decided on a case-by-case basis by the cocotb maintainers.
+At least, a cocotb-hosted extension needs to fulfill the following requirements:
+
+* It needs tests that can be run in order to see that the extension works
+  and continues to work as cocotb itself changes, especially when a new release is upcoming.
+* It needs documentation (preferably in Sphinx) so that users know how to use the extension.
+* We must have access to the PyPi project so that we can continue to upload new releases
+  in case the extension maintainer ("Owner") becomes unresponsive.

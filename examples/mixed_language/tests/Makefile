@@ -1,3 +1,6 @@
+# Override this variable to use a VHDL toplevel instead of SystemVerilog
+TOPLEVEL_LANG ?= verilog
+
 ifeq ($(SIM),)
 all:
 	@echo "Skipping example mixed_language since Icarus doesn't support this"
@@ -6,17 +9,18 @@ else ifeq ($(shell echo $(SIM) | tr A-Z a-z),icarus)
 all:
 	@echo "Skipping example mixed_language since Icarus doesn't support this"
 clean::
+else ifneq ($(shell echo $(TOPLEVEL_LANG) | tr A-Z a-z),verilog)
+all:
+	@echo "Skipping example mixed_language since only Verilog toplevel implemented"
+clean::
 else
-
-# Override this variable to use a VHDL toplevel instead of SystemVerilog
-TOPLEVEL_LANG ?= verilog
 
 TOPLEVEL = endian_swapper_mixed
 
 PWD=$(shell pwd)
 
-VERILOG_SOURCES = $(PWD)/../../endian_swapper/hdl/endian_swapper.sv
-VHDL_SOURCES    = $(PWD)/../../endian_swapper/hdl/endian_swapper.vhdl
+VERILOG_SOURCES = $(PWD)/../hdl/endian_swapper.sv
+VHDL_SOURCES    = $(PWD)/../hdl/endian_swapper.vhdl
 
 ifeq ($(TOPLEVEL_LANG),verilog)
     VERILOG_SOURCES += $(PWD)/../hdl/toplevel.sv
@@ -34,7 +38,6 @@ ifneq ($(filter $(SIM),ius xcelium),)
     SIM_ARGS += -v93
 endif
 
-include $(shell cocotb-config --makefiles)/Makefile.inc
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
 endif

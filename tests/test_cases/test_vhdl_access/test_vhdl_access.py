@@ -26,29 +26,28 @@
 import logging
 
 import cocotb
-from cocotb.handle import HierarchyObject, ModifiableObject, RealObject, IntegerObject, ConstantObject, EnumObject
-from cocotb.triggers import Timer
-from cocotb.result import TestError, TestFailure
+from cocotb.handle import HierarchyObject, ModifiableObject, IntegerObject, ConstantObject, EnumObject
+from cocotb.result import TestFailure
+
 
 @cocotb.test()
-def check_enum_object(dut):
+async def check_enum_object(dut):
     """
     Enumerations currently behave as normal signals
 
     TODO: Implement an EnumObject class and detect valid string mappings
     """
-    yield Timer(100)
     if not isinstance(dut.inst_ram_ctrl.write_ram_fsm, EnumObject):
         raise TestFailure("Expected the FSM enum to be an EnumObject")
 
+
 @cocotb.test()
-def check_objects(dut):
+async def check_objects(dut):
     """
     Check the types of objects that are returned
     """
     tlog = logging.getLogger("cocotb.test")
     fails = 0
-    yield Timer(100)
 
     def check_instance(obj, objtype):
         if not isinstance(obj, objtype):
@@ -92,14 +91,14 @@ def check_objects(dut):
     if fails:
         raise TestFailure("%d Failures during the test" % fails)
 
+
 @cocotb.test()
-def port_not_hierarchy(dut):
+async def port_not_hierarchy(dut):
     """
     Test for issue raised by Luke - iteration causes a toplevel port type to
     change from ModifiableObject to HierarchyObject
     """
     tlog = logging.getLogger("cocotb.test")
-    yield Timer(100)
     if not isinstance(dut.aclk, ModifiableObject):
         tlog.error("dut.aclk should be ModifiableObject but got %s", type(dut.aclk).__name__)
     else:

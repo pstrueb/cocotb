@@ -33,37 +33,37 @@ FIXME: We have a problem here.  If a coroutine schedules a read-only but we
 also have pending writes we have to schedule the ReadWrite callback before
 the ReadOnly (and this is invalid, at least in Modelsim).
 """
+from contextlib import contextmanager
 import os
 import sys
 import logging
 import threading
 import inspect
-
-# Debug mode controlled by environment variables
-if "COCOTB_ENABLE_PROFILING" in os.environ:
-    import cProfile
-    import pstats
-    _profile = cProfile.Profile()
-    _profiling = True
-else:
-    _profiling = False
-
-# Sadly the Python standard logging module is very slow so it's better not to
-# make any calls by testing a boolean flag first
-if "COCOTB_SCHEDULER_DEBUG" in os.environ:
-    _debug = True
-else:
-    _debug = False
-
+import warnings
+from typing import Any, Union
+from collections.abc import Coroutine
 
 import cocotb
 import cocotb.decorators
+from cocotb.decorators import RunningTask
 from cocotb.triggers import (Trigger, GPITrigger, Timer, ReadOnly,
                              NextTimeStep, ReadWrite, Event, Join, NullTrigger)
 from cocotb.log import SimLog
 from cocotb.result import TestComplete
 from cocotb.utils import remove_traceback_frames
-from cocotb import _py_compat
+from cocotb import outcomes, _py_compat
+
+
+# Debug mode controlled by environment variables
+_profiling = "COCOTB_ENABLE_PROFILING" in os.environ
+if _profiling:
+    import cProfile
+    import pstats
+    _profile = cProfile.Profile()
+
+# Sadly the Python standard logging module is very slow so it's better not to
+# make any calls by testing a boolean flag first
+_debug = "COCOTB_SCHEDULER_DEBUG" in os.environ
 
 
 class InternalError(RuntimeError):
@@ -73,6 +73,7 @@ class InternalError(RuntimeError):
 
 class profiling_context:
     """ Context manager that profiles its contents """
+
     def __enter__(self):
         _profile.enable()
 
@@ -80,13 +81,12 @@ class profiling_context:
         _profile.disable()
 
 
-from cocotb import outcomes
-
 class external_state:
     INIT = 0
     RUNNING = 1
     PAUSED = 2
     EXITED = 3
+
 
 @cocotb.decorators.public
 class external_waiter:
@@ -106,7 +106,8 @@ class external_waiter:
     def _propagate_state(self, new_state):
         with self.cond:
             if _debug:
-                self._log.debug("Changing state from %d -> %d from %s" % (self.state, new_state, threading.current_thread()))
+                self._log.debug("Changing state from %d -> %d from %s" % (
+                    self.state, new_state, threading.current_thread()))
             self.state = new_state
             self.cond.notify()
 
@@ -139,16 +140,21 @@ class external_waiter:
 
             if _debug:
                 if self.state == external_state.EXITED:
-                    self._log.debug("Thread %s has exited from %s" % (self.thread, threading.current_thread()))
+                    self._log.debug("Thread %s has exited from %s" % (
+                        self.thread, threading.current_thread()))
                 elif self.state == external_state.PAUSED:
-                    self._log.debug("Thread %s has called yield from %s"  % (self.thread, threading.current_thread()))
+                    self._log.debug("Thread %s has called yield from %s"  % (
+                        self.thread, threading.current_thread()))
                 elif self.state == external_state.RUNNING:
-                    self._log.debug("Thread %s is in RUNNING from %d"  % (self.thread, threading.current_thread()))
+                    self._log.debug("Thread %s is in RUNNING from %d"  % (
+                        self.thread, threading.current_thread()))
 
             if self.state == external_state.INIT:
-                raise Exception("Thread %s state was not allowed from %s"  % (self.thread, threading.current_thread()))
+                raise Exception("Thread %s state was not allowed from %s"  % (
+                    self.thread, threading.current_thread()))
 
         return self.state
+
 
 class Scheduler:
     """The main scheduler.
@@ -179,11 +185,11 @@ class Scheduler:
         - Any pending writes are cached and do not happen immediately
 
     ReadOnly mode
-        - Corresponds to :any:`cbReadOnlySynch` (VPI) or :any:`vhpiCbLastKnownDeltaCycle`
+        - Corresponds to ``cbReadOnlySynch`` (VPI) or ``vhpiCbRepEndOfTimeStep``
           (VHPI).  In this state we are not allowed to perform writes.
 
     Write mode
-        - Corresponds to :any:`cbReadWriteSynch` (VPI) or :c:macro:`vhpiCbEndOfProcesses` (VHPI)
+        - Corresponds to ``cbReadWriteSynch`` (VPI) or ``vhpiCbRepLastKnownDeltaCycle`` (VHPI)
           In this mode we play back all the cached write updates.
 
     We can legally transition from Normal to Write by registering a :class:`~cocotb.triggers.ReadWrite`
@@ -223,14 +229,12 @@ class Scheduler:
         # indexed by trigger
         self._trigger2coros = _py_compat.insertion_ordered_dict()
 
-        # A dictionary mapping coroutines to the trigger they are waiting for
-        self._coro2trigger = _py_compat.insertion_ordered_dict()
-
         # Our main state
         self._mode = Scheduler._MODE_NORMAL
 
-        # A dictionary of pending writes
-        self._writes = _py_compat.insertion_ordered_dict()
+        # A dictionary of pending (write_func, args), keyed by handle. Only the last scheduled write
+        # in a timestep is performed, all the rest are discarded in python.
+        self._write_calls = _py_compat.insertion_ordered_dict()
 
         self._pending_coros = []
         self._pending_triggers = []
@@ -240,6 +244,8 @@ class Scheduler:
         self._terminate = False
         self._test = None
         self._main_thread = threading.current_thread()
+
+        self._current_task = None
 
         self._is_reacting = False
 
@@ -255,9 +261,9 @@ class Scheduler:
 
             await self._read_write
 
-            while self._writes:
-                handle, value = self._writes.popitem()
-                handle.setimmediatevalue(value)
+            while self._write_calls:
+                handle, (func, args) = self._write_calls.popitem()
+                func(*args)
             self._writes_pending.clear()
 
     def _check_termination(self):
@@ -280,15 +286,13 @@ class Scheduler:
 
             self._timer1.prime(self._test_completed)
             self._trigger2coros = _py_compat.insertion_ordered_dict()
-            self._coro2trigger = _py_compat.insertion_ordered_dict()
             self._terminate = False
-            self._writes = _py_compat.insertion_ordered_dict()
+            self._write_calls = _py_compat.insertion_ordered_dict()
             self._writes_pending.clear()
             self._mode = Scheduler._MODE_TERM
 
     def _test_completed(self, trigger=None):
-        """Called after a test and its cleanup have completed
-        """
+        """Called after a test and its cleanup have completed"""
         if _debug:
             self.log.debug("begin_test called with trigger: %s" %
                            (str(trigger)))
@@ -316,13 +320,21 @@ class Scheduler:
             if _debug:
                 self.log.debug("Issue test result to regression object")
 
-            # this may scheduler another test
+            # this may schedule another test
             cocotb.regression_manager.handle_result(test)
 
             # if it did, make sure we handle the test completing
             self._check_termination()
 
     def react(self, trigger):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._react(trigger)
+
+    def _react(self, trigger):
         """
         Called when a trigger fires.
 
@@ -346,7 +358,6 @@ class Scheduler:
             self._event_loop(trigger)
         finally:
             self._is_reacting = False
-
 
     def _event_loop(self, trigger):
         """
@@ -422,10 +433,9 @@ class Scheduler:
                     del trigger
                     continue
 
-
                 if _debug:
-                    debugstr = "\n\t".join([coro.__name__ for coro in scheduling])
-                    if len(scheduling):
+                    debugstr = "\n\t".join([coro._coro.__qualname__ for coro in scheduling])
+                    if len(scheduling) > 0:
                         debugstr = "\n\t" + debugstr
                     self.log.debug("%d pending coroutines for event %s%s" %
                                    (len(scheduling), str(trigger), debugstr))
@@ -434,11 +444,19 @@ class Scheduler:
                 trigger.unprime()
 
                 for coro in scheduling:
+                    if coro._outcome is not None:
+                        # coroutine was killed by another coroutine waiting on the same trigger
+                        continue
                     if _debug:
-                        self.log.debug("Scheduling coroutine %s" % (coro.__name__))
-                    self.schedule(coro, trigger=trigger)
+                        self.log.debug("Scheduling coroutine %s" % (coro._coro.__qualname__))
+                    self._schedule(coro, trigger=trigger)
                     if _debug:
-                        self.log.debug("Scheduled coroutine %s" % (coro.__name__))
+                        self.log.debug("Scheduled coroutine %s" % (coro._coro.__qualname__))
+
+                    # remove our reference to the objects at the end of each loop,
+                    # to try and avoid them being destroyed at a weird time (as
+                    # happened in gh-957)
+                    del coro
 
                 # Schedule may have queued up some events so we'll burn through those
                 while self._pending_events:
@@ -451,7 +469,6 @@ class Scheduler:
                 # to try and avoid them being destroyed at a weird time (as
                 # happened in gh-957)
                 del trigger
-                del coro
                 del scheduling
 
             # no more pending triggers
@@ -460,17 +477,21 @@ class Scheduler:
                 self.log.debug("All coroutines scheduled, handing control back"
                                " to simulator")
 
-
     def unschedule(self, coro):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._unschedule(coro)
+
+    def _unschedule(self, coro):
         """Unschedule a coroutine.  Unprime any pending triggers"""
 
         # Unprime the trigger this coroutine is waiting on
-        try:
-            trigger = self._coro2trigger.pop(coro)
-        except KeyError:
-            # coroutine probably finished
-            pass
-        else:
+        trigger = coro._trigger
+        if trigger is not None:
+            coro._trigger = None
             if coro in self._trigger2coros.setdefault(trigger, []):
                 self._trigger2coros[trigger].remove(coro)
             if not self._trigger2coros[trigger]:
@@ -485,10 +506,10 @@ class Scheduler:
 
             if not self._terminate:
                 self._terminate = True
-                self.cleanup()
+                self._cleanup()
 
         elif Join(coro) in self._trigger2coros:
-            self.react(Join(coro))
+            self._react(Join(coro))
         else:
             try:
                 # throws an error if the background coroutine errored
@@ -496,14 +517,15 @@ class Scheduler:
                 coro._outcome.get()
             except (TestComplete, AssertionError) as e:
                 coro.log.info("Test stopped by this forked coroutine")
-                e = remove_traceback_frames(e, ['unschedule', 'get'])
+                e = remove_traceback_frames(e, ['_unschedule', 'get'])
                 self._test.abort(e)
             except Exception as e:
                 coro.log.error("Exception raised by this forked coroutine")
-                e = remove_traceback_frames(e, ['unschedule', 'get'])
+                e = remove_traceback_frames(e, ['_unschedule', 'get'])
                 self._test.abort(e)
 
-    def save_write(self, handle, value):
+    def _schedule_write(self, handle, write_func, *args):
+        """ Queue `write_func` to be called on the next ReadWrite trigger. """
         if self._mode == Scheduler._MODE_READONLY:
             raise Exception("Write to object {0} was scheduled during a read-only sync phase.".format(handle._name))
 
@@ -512,12 +534,12 @@ class Scheduler:
         if self._write_coro_inst is None:
             self._write_coro_inst = self.add(self._do_writes())
 
-        self._writes[handle] = value
+        self._write_calls[handle] = (write_func, args)
         self._writes_pending.set()
 
-    def _coroutine_yielded(self, coro, trigger):
-        """Prime the trigger and update our internal mappings."""
-        self._coro2trigger[coro] = trigger
+    def _resume_coro_upon(self, coro, trigger):
+        """Schedule `coro` to be resumed when `trigger` fires."""
+        coro._trigger = trigger
 
         trigger_coros = self._trigger2coros.setdefault(trigger, [])
         if coro is self._write_coro_inst:
@@ -537,24 +559,38 @@ class Scheduler:
                     "More than one coroutine waiting on an unprimed trigger")
 
             try:
-                trigger.prime(self.react)
+                trigger.prime(self._react)
             except Exception as e:
                 # discard the trigger we associated, it will never fire
                 self._trigger2coros.pop(trigger)
 
                 # replace it with a new trigger that throws back the exception
-                error_trigger = NullTrigger(outcome=outcomes.Error(e))
-                self._coro2trigger[coro] = error_trigger
-                self._trigger2coros[error_trigger] = [coro]
-
-                # wake up the coroutines
-                error_trigger.prime(self.react)
+                self._resume_coro_upon(
+                    coro,
+                    NullTrigger(name="Trigger.prime() Error", outcome=outcomes.Error(e))
+                )
 
     def queue(self, coroutine):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._queue(coroutine)
+
+    def _queue(self, coroutine):
         """Queue a coroutine for execution"""
         self._pending_coros.append(coroutine)
 
     def queue_function(self, coro):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._queue_function(coro)
+
+    def _queue_function(self, coro):
         """Queue a coroutine for execution and move the containing thread
         so that it does not block execution of the main thread any longer.
         """
@@ -598,6 +634,14 @@ class Scheduler:
         return event.outcome.get()
 
     def run_in_executor(self, func, *args, **kwargs):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._run_in_executor(func, *args, **kwargs)
+
+    def _run_in_executor(self, func, *args, **kwargs):
         """Run the coroutine in a separate execution thread
         and return an awaitable object for the caller.
         """
@@ -616,7 +660,7 @@ class Scheduler:
         async def wrapper():
             waiter = external_waiter()
             thread = threading.Thread(group=None, target=execute_external,
-                                      name=func.__name__ + "_thread",
+                                      name=func.__qualname__ + "_thread",
                                       args=([func, waiter]), kwargs={})
 
             waiter.thread = thread
@@ -628,12 +672,19 @@ class Scheduler:
 
         return wrapper()
 
-    def add(self, coroutine):
-        """Add a new coroutine.
+    @staticmethod
+    def create_task(coroutine: Any) -> RunningTask:
+        """ Checks to see if the given object is a schedulable coroutine object and if so, returns it """
 
-        Just a wrapper around self.schedule which provides some debug and
-        useful error messages in the event of common gotchas.
-        """
+        if isinstance(coroutine, RunningTask):
+            return coroutine
+        if inspect.iscoroutine(coroutine):
+            return RunningTask(coroutine)
+        if inspect.iscoroutinefunction(coroutine):
+            raise TypeError(
+                "Coroutine function {} should be called prior to being "
+                "scheduled."
+                .format(coroutine))
         if isinstance(coroutine, cocotb.decorators.coroutine):
             raise TypeError(
                 "Attempt to schedule a coroutine that hasn't started: {}.\n"
@@ -641,37 +692,70 @@ class Scheduler:
                 "decorator?"
                 .format(coroutine)
             )
-
-        if inspect.iscoroutine(coroutine):
-            return self.add(cocotb.decorators.RunningTask(coroutine))
-
-        elif sys.version_info >= (3, 6) and inspect.isasyncgen(coroutine):
+        if sys.version_info >= (3, 6) and inspect.isasyncgen(coroutine):
             raise TypeError(
                 "{} is an async generator, not a coroutine. "
                 "You likely used the yield keyword instead of await.".format(
                     coroutine.__qualname__))
+        raise TypeError(
+            "Attempt to add an object of type {} to the scheduler, which "
+            "isn't a coroutine: {!r}\n"
+            "Did you forget to use the @cocotb.coroutine decorator?"
+            .format(type(coroutine), coroutine)
+        )
 
-        elif not isinstance(coroutine, cocotb.decorators.RunningTask):
-            raise TypeError(
-                "Attempt to add a object of type {} to the scheduler, which "
-                "isn't a coroutine: {!r}\n"
-                "Did you forget to use the @cocotb.coroutine decorator?"
-                .format(type(coroutine), coroutine)
-            )
+    def add(self, coroutine: Union[RunningTask, Coroutine]) -> RunningTask:
+        """Add a new coroutine.
+
+        Just a wrapper around self.schedule which provides some debug and
+        useful error messages in the event of common gotchas.
+        """
+
+        task = self.create_task(coroutine)
 
         if _debug:
-            self.log.debug("Adding new coroutine %s" % coroutine.__name__)
+            self.log.debug("Adding new coroutine %s" % task._coro.__qualname__)
 
-        self.schedule(coroutine)
+        self._schedule(task)
         self._check_termination()
-        return coroutine
+        return task
+
+    def start_soon(self, coro: Union[Coroutine, RunningTask]) -> RunningTask:
+        """
+        Schedule a coroutine to be run concurrently, starting after the current coroutine yields control.
+
+        In contrast to :func:`~cocotb.fork` which starts the given coroutine immediately, this function
+        starts the given coroutine only after the current coroutine yields control.
+        This is useful when the coroutine to be forked has logic before the first
+        :keyword:`await` that may not be safe to execute immediately.
+        """
+
+        task = self.create_task(coro)
+
+        if _debug:
+            self.log.debug("Queueing a new coroutine %s" % task._coro.__qualname__)
+
+        self._queue(task)
+        return task
 
     def add_test(self, test_coro):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._add_test(test_coro)
+
+    def _add_test(self, test_coro):
         """Called by the regression manager to queue the next test"""
         if self._test is not None:
             raise InternalError("Test was added while another was in progress")
+
         self._test = test_coro
-        return self.add(test_coro)
+        self._resume_coro_upon(
+            test_coro,
+            NullTrigger(name="Start {!s}".format(test_coro), outcome=outcomes.Value(None))
+        )
 
     # This collection of functions parses a trigger out of the object
     # that was yielded by a coroutine, converting `list` -> `Waitable`,
@@ -682,14 +766,14 @@ class Scheduler:
     def _trigger_from_started_coro(self, result: cocotb.decorators.RunningTask) -> Trigger:
         if _debug:
             self.log.debug("Joining to already running coroutine: %s" %
-                           result.__name__)
+                           result._coro.__qualname__)
         return result.join()
 
     def _trigger_from_unstarted_coro(self, result: cocotb.decorators.RunningTask) -> Trigger:
-        self.queue(result)
+        self._queue(result)
         if _debug:
             self.log.debug("Scheduling nested coroutine: %s" %
-                           result.__name__)
+                           result._coro.__qualname__)
         return result.join()
 
     def _trigger_from_waitable(self, result: cocotb.triggers.Waitable) -> Trigger:
@@ -733,7 +817,25 @@ class Scheduler:
             .format(type(result), result)
         )
 
+    @contextmanager
+    def _task_context(self, task):
+        """Context manager for the currently running task."""
+        old_task = self._current_task
+        self._current_task = task
+        try:
+            yield
+        finally:
+            self._current_task = old_task
+
     def schedule(self, coroutine, trigger=None):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._schedule(coroutine, trigger)
+
+    def _schedule(self, coroutine, trigger=None):
         """Schedule a coroutine by calling the send method.
 
         Args:
@@ -741,71 +843,92 @@ class Scheduler:
             trigger (cocotb.triggers.Trigger): The trigger that caused this
                 coroutine to be scheduled.
         """
-        if trigger is None:
-            send_outcome = outcomes.Value(None)
-        else:
-            send_outcome = trigger._outcome
-        if _debug:
-            self.log.debug("Scheduling with {}".format(send_outcome))
-
-        coro_completed = False
-        try:
-            result = coroutine._advance(send_outcome)
+        with self._task_context(coroutine):
+            if trigger is None:
+                send_outcome = outcomes.Value(None)
+            else:
+                send_outcome = trigger._outcome
             if _debug:
-                self.log.debug("Coroutine %s yielded %s (mode %d)" %
-                               (coroutine.__name__, str(result), self._mode))
+                self.log.debug("Scheduling with {}".format(send_outcome))
 
-        except cocotb.decorators.CoroutineComplete as exc:
-            if _debug:
-                self.log.debug("Coroutine {} completed with {}".format(
-                    coroutine, coroutine._outcome
-                ))
-            coro_completed = True
-
-        # this can't go in the else above, as that causes unwanted exception
-        # chaining
-        if coro_completed:
-            self.unschedule(coroutine)
-
-        # Don't handle the result if we're shutting down
-        if self._terminate:
-            return
-
-        if not coro_completed:
+            coro_completed = False
             try:
-                result = self._trigger_from_any(result)
-            except TypeError as exc:
-                # restart this coroutine with an exception object telling it that
-                # it wasn't allowed to yield that
-                result = NullTrigger(outcome=outcomes.Error(exc))
-
-            self._coroutine_yielded(coroutine, result)
-
-        # We do not return from here until pending threads have completed, but only
-        # from the main thread, this seems like it could be problematic in cases
-        # where a sim might change what this thread is.
-
-        if self._main_thread is threading.current_thread():
-
-            for ext in self._pending_threads:
-                ext.thread_start()
+                coroutine._trigger = None
+                result = coroutine._advance(send_outcome)
                 if _debug:
-                    self.log.debug("Blocking from %s on %s" % (threading.current_thread(), ext.thread))
-                state = ext.thread_wait()
-                if _debug:
-                    self.log.debug("Back from wait on self %s with newstate %d" % (threading.current_thread(), state))
-                if state == external_state.EXITED:
-                    self._pending_threads.remove(ext)
-                    self._pending_events.append(ext.event)
+                    self.log.debug("Coroutine %s yielded %s (mode %d)" %
+                                   (coroutine._coro.__qualname__, str(result), self._mode))
 
-        # Handle any newly queued coroutines that need to be scheduled
-        while self._pending_coros:
-            self.add(self._pending_coros.pop(0))
+            except cocotb.decorators.CoroutineComplete:
+                if _debug:
+                    self.log.debug("Coroutine {} completed with {}".format(
+                        coroutine, coroutine._outcome
+                    ))
+                coro_completed = True
+
+            # this can't go in the else above, as that causes unwanted exception
+            # chaining
+            if coro_completed:
+                self._unschedule(coroutine)
+
+            # Don't handle the result if we're shutting down
+            if self._terminate:
+                return
+
+            if not coro_completed:
+                try:
+                    result = self._trigger_from_any(result)
+                except TypeError as exc:
+                    # restart this coroutine with an exception object telling it that
+                    # it wasn't allowed to yield that
+                    result = NullTrigger(outcome=outcomes.Error(exc))
+
+                self._resume_coro_upon(coroutine, result)
+
+            # We do not return from here until pending threads have completed, but only
+            # from the main thread, this seems like it could be problematic in cases
+            # where a sim might change what this thread is.
+
+            if self._main_thread is threading.current_thread():
+
+                for ext in self._pending_threads:
+                    ext.thread_start()
+                    if _debug:
+                        self.log.debug("Blocking from %s on %s" % (
+                            threading.current_thread(), ext.thread))
+                    state = ext.thread_wait()
+                    if _debug:
+                        self.log.debug("Back from wait on self %s with newstate %d" % (
+                            threading.current_thread(), state))
+                    if state == external_state.EXITED:
+                        self._pending_threads.remove(ext)
+                        self._pending_events.append(ext.event)
+
+            # Handle any newly queued coroutines that need to be scheduled
+            while self._pending_coros:
+                self.add(self._pending_coros.pop(0))
 
     def finish_test(self, exc):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._finish_test(exc)
+
+    def _finish_test(self, exc):
         self._test.abort(exc)
+        self._check_termination()
 
     def finish_scheduler(self, exc):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._finish_scheduler(exc)
+
+    def _finish_scheduler(self, exc):
         """Directly call into the regression manager and end test
            once we return the sim will close us so no cleanup is needed.
         """
@@ -818,9 +941,17 @@ class Scheduler:
             cocotb.regression_manager.handle_result(self._test)
 
     def cleanup(self):
+        """
+        .. deprecated:: 1.5
+            This function is now private.
+        """
+        warnings.warn("This function is now private.", DeprecationWarning, stacklevel=2)
+        return self._cleanup()
+
+    def _cleanup(self):
         """Clear up all our state.
 
-        Unprime all pending triggers and kill off any coroutines stop all externals.
+        Unprime all pending triggers and kill off any coroutines, stop all externals.
         """
         # copy since we modify this in kill
         items = list(self._trigger2coros.items())
@@ -837,4 +968,4 @@ class Scheduler:
             raise Exception("Cleanup() called outside of the main thread")
 
         for ext in self._pending_threads:
-            self.log.warn("Waiting for %s to exit", ext.thread)
+            self.log.warning("Waiting for %s to exit", ext.thread)

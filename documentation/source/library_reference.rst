@@ -2,6 +2,20 @@
 Library Reference
 *****************
 
+.. spelling::
+   AXIProtocolError
+   BusDriver
+   De
+   Re
+   ReadOnly
+   args
+   cbNextSimTime
+   ing
+   sim
+   stdout
+   un
+
+
 Test Results
 ============
 
@@ -44,12 +58,6 @@ Interacting with the Simulator
     :member-order: bysource
     :exclude-members: get_value, get_buff, get_binstr, get_value_signed
 
-.. autoclass:: cocotb.bus.Bus
-    :members:
-    :member-order: bysource
-
-.. autoclass:: cocotb.clock.Clock
-
 .. autofunction:: cocotb.fork
 
 .. autofunction:: cocotb.decorators.RunningTask.join
@@ -79,27 +87,36 @@ classes used within ``cocotb``.
 Testbench Structure
 ===================
 
+These are provided by the `cocotb-bus <https://github.com/cocotb/cocotb-bus>`_ package.
+
+Bus
+---
+
+.. autoclass:: cocotb_bus.bus.Bus
+    :members:
+    :member-order: bysource
+
 Driver
 ------
 
-.. autoclass:: cocotb.drivers.Driver
+.. autoclass:: cocotb_bus.drivers.Driver
     :members:
     :member-order: bysource
     :private-members:
 
-.. autoclass:: cocotb.drivers.BitDriver
-    :members:
-    :member-order: bysource
-    :show-inheritance:
-    :private-members:
-
-.. autoclass:: cocotb.drivers.BusDriver
+.. autoclass:: cocotb_bus.drivers.BitDriver
     :members:
     :member-order: bysource
     :show-inheritance:
     :private-members:
 
-.. autoclass:: cocotb.drivers.ValidatedBusDriver
+.. autoclass:: cocotb_bus.drivers.BusDriver
+    :members:
+    :member-order: bysource
+    :show-inheritance:
+    :private-members:
+
+.. autoclass:: cocotb_bus.drivers.ValidatedBusDriver
     :members:
     :member-order: bysource
     :show-inheritance:
@@ -108,17 +125,12 @@ Driver
 Monitor
 -------
 
-.. currentmodule:: cocotb.monitors
-
-.. autoclass:: Monitor
-    :members: _monitor_recv, _recv
+.. autoclass:: cocotb_bus.monitors.Monitor
+    :members:
     :member-order: bysource
     :private-members:
 
-    .. automethod:: wait_for_recv(timeout=None)
-
-
-.. autoclass:: BusMonitor
+.. autoclass:: cocotb_bus.monitors.BusMonitor
     :members:
     :member-order: bysource
     :show-inheritance:
@@ -127,13 +139,48 @@ Monitor
 Scoreboard
 ----------
 
-.. currentmodule:: cocotb.scoreboard
-
-.. automodule:: cocotb.scoreboard
+.. automodule:: cocotb_bus.scoreboard
     :members:
     :member-order: bysource
     :show-inheritance:
     :synopsis: Class for scoreboards.
+
+Generators
+----------
+
+.. automodule:: cocotb.generators
+    :members:
+    :member-order: bysource
+    :show-inheritance:
+    :synopsis: Class for generators.
+
+Bit
+^^^
+
+.. automodule:: cocotb.generators.bit
+    :members:
+    :member-order: bysource
+    :show-inheritance:
+
+
+Byte
+^^^^
+
+.. automodule:: cocotb.generators.byte
+    :members:
+    :member-order: bysource
+    :show-inheritance:
+
+..
+   Needs scapy
+
+   Packet
+   ^^^^^^
+
+   .. automodule:: cocotb.generators.packet
+       :members:
+       :member-order: bysource
+       :show-inheritance:
 
 Clock
 -----
@@ -145,8 +192,6 @@ Clock
 
 Utilities
 =========
-
-.. autodata:: cocotb.plusargs
 
 .. automodule:: cocotb.utils
     :members:
@@ -198,7 +243,9 @@ Simulation Object Handles
     :member-order: bysource
     :show-inheritance:
     :synopsis: Classes for simulation objects.
-
+    :exclude-members: Deposit, Force, Freeze, Release
+..
+   Excluding the Assignment Methods that are getting their own section below
 
 .. _assignment-methods:
 
@@ -227,13 +274,15 @@ AMBA
 
 Advanced Microcontroller Bus Architecture.
 
-.. currentmodule:: cocotb.drivers.amba
+.. currentmodule:: cocotb_bus.drivers.amba
+
+.. autoclass:: AXI4Master
+    :members:
+    :member-order: bysource
 
 .. autoclass:: AXI4LiteMaster
-
-    .. automethod:: write(address, value, byte_enable=0xf, address_latency=0, data_latency=0)
-    .. automethod:: read(address, sync=True)
-
+    :members:
+    :member-order: bysource
 
 .. autoclass:: AXI4Slave
     :members:
@@ -243,7 +292,7 @@ Advanced Microcontroller Bus Architecture.
 Avalon
 ^^^^^^
 
-.. currentmodule:: cocotb.drivers.avalon
+.. currentmodule:: cocotb_bus.drivers.avalon
 
 .. autoclass:: AvalonMM
     :members:
@@ -251,10 +300,9 @@ Avalon
     :show-inheritance:
 
 .. autoclass:: AvalonMaster
-
-    .. automethod:: write(address, value)
-    .. automethod:: read(address, sync=True)
-
+    :members:
+    :member-order: bysource
+    :show-inheritance:
 
 .. autoclass:: AvalonMemory
     :members:
@@ -275,18 +323,18 @@ Avalon
 OPB
 ^^^
 
-.. currentmodule:: cocotb.drivers.opb
+.. currentmodule:: cocotb_bus.drivers.opb
 
 .. autoclass:: OPBMaster
-
-    .. automethod:: write(address, value, sync=True)
-    .. automethod:: read(address, sync=True)
+    :members:
+    :member-order: bysource
+    :show-inheritance:
 
 
 XGMII
 ^^^^^
 
-.. currentmodule:: cocotb.drivers.xgmii
+.. currentmodule:: cocotb_bus.drivers.xgmii
 
 .. autoclass:: XGMII
     :members:
@@ -299,7 +347,7 @@ Monitors
 Avalon
 ^^^^^^
 
-.. currentmodule:: cocotb.monitors.avalon
+.. currentmodule:: cocotb_bus.monitors.avalon
 
 .. autoclass:: AvalonST
     :members:
@@ -314,13 +362,38 @@ Avalon
 XGMII
 ^^^^^
 
-.. autoclass:: cocotb.monitors.xgmii.XGMII
+.. autoclass:: cocotb_bus.monitors.xgmii.XGMII
     :members:
     :member-order: bysource
     :show-inheritance:
 
 Miscellaneous
 =============
+
+Asynchronous Queues
+-------------------
+
+.. automodule:: cocotb.queue
+    :members:
+    :member-order: bysource
+
+Other Runtime Information
+-------------------------
+
+.. autodata:: cocotb.argv
+
+.. autodata:: cocotb.SIM_NAME
+
+.. autodata:: cocotb.SIM_VERSION
+
+.. autodata:: cocotb.RANDOM_SEED
+
+.. autodata:: cocotb.plusargs
+
+.. autodata:: cocotb.LANGUAGE
+
+.. autodata:: cocotb.top
+
 
 Signal Tracer for WaveDrom
 --------------------------
@@ -331,16 +404,15 @@ Signal Tracer for WaveDrom
     :synopsis: A signal tracer for WaveDrom.
 
 
-Developer-focused
-=================
+Implementation Details
+======================
+
+.. note::
+    In general, nothing in this section should be interacted with directly -
+    these components work mostly behind the scenes.
 
 The Scheduler
 -------------
-
-.. note::
-    The scheduler object should generally not be interacted with directly -
-    the only part of it that a user will need is encapsulated in :func:`~cocotb.fork`,
-    everything else works behind the scenes.
 
 .. currentmodule:: cocotb.scheduler
 
@@ -348,6 +420,30 @@ The Scheduler
 
 .. autoclass:: Scheduler
     :members:
+    :member-order: bysource
+
+The Regression Manager
+----------------------
+
+.. currentmodule:: cocotb.regression
+
+.. autodata:: cocotb.regression_manager
+
+.. autoclass:: RegressionManager
+    :members:
+    :member-order: bysource
+
+
+The ``cocotb.simulator`` module
+-------------------------------
+
+This module is a Python wrapper to libgpi.
+It should not be considered public API, but is documented here for developers
+of cocotb.
+
+.. automodule:: cocotb.simulator
+    :members:
+    :undoc-members:
     :member-order: bysource
 
 

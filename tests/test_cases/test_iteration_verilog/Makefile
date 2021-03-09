@@ -35,16 +35,10 @@ clean::
 
 else
 
-PWD=$(shell pwd)
-
-COCOTB?=$(PWD)/../../..
-
-VERILOG_SOURCES = $(COCOTB)/examples/endian_swapper/hdl/endian_swapper.sv
+VERILOG_SOURCES = endian_swapper.sv
 TOPLEVEL = endian_swapper_sv
-
 MODULE = test_iteration_es
 
-include $(shell cocotb-config --makefiles)/Makefile.inc
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
 endif

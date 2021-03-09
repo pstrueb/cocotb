@@ -12,11 +12,6 @@ import os
 import subprocess
 import sys
 
-# If extensions (or modules to document with autodoc) are in another directory,
-# add these directories to sys.path here. If the directory is relative to the
-# documentation root, use os.path.abspath to make it absolute, like shown here.
-sys.path.insert(0, os.path.abspath('../..'))
-
 # Add in-tree extensions to path
 sys.path.insert(0, os.path.abspath('../sphinxext'))
 
@@ -48,9 +43,13 @@ extensions = [
     'sphinx_issues',
     'sphinxarg.ext',
     'sphinxcontrib.spelling',
+    'sphinx_tabs.tabs',
     ]
 
-intersphinx_mapping = {'python': ('https://docs.python.org/3', None)}
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3', None),
+    'ghdl': ('https://ghdl.readthedocs.io/en/latest', None)
+}
 
 # Github repo
 issues_github_path = "cocotb/cocotb"
@@ -69,7 +68,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = 'cocotb'
-copyright = '2014-{0}, PotentialVentures'.format(datetime.datetime.now().year)
+copyright = '2014-{0}, cocotb contributors'.format(datetime.datetime.now().year)
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -242,7 +241,7 @@ latex_elements = {
 # (source start file, target name, title, author, documentclass [howto/manual]).
 latex_documents = [
   ('index', 'cocotb.tex', 'cocotb Documentation',
-   'PotentialVentures', 'manual'),
+   'cocotb contributors', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -272,7 +271,7 @@ latex_documents = [
 # (source start file, name, description, authors, manual section).
 man_pages = [
     ('index', 'cocotb', 'cocotb Documentation',
-     ['PotentialVentures'], 1)
+     ['cocotb contributors'], 1)
 ]
 
 # If true, show URL addresses after external links.
@@ -286,7 +285,7 @@ man_pages = [
 #  dir menu entry, description, category)
 texinfo_documents = [
   ('index', 'cocotb', 'cocotb Documentation',
-   'PotentialVentures', 'cocotb', 'Coroutine Cosimulation TestBench \
+   'cocotb contributors', 'cocotb', 'Coroutine Cosimulation TestBench \
      environment for efficient verification of RTL using Python.',
    'Miscellaneous'),
 ]
@@ -303,18 +302,15 @@ texinfo_documents = [
 # If true, do not generate a @detailmenu in the "Top" node's menu.
 #texinfo_no_detailmenu = False
 
-# For now show the todos
-todo_include_todos = True
+todo_include_todos = False
 
 # -- Extra setup for C documentation with Doxygen and breathe ------------------
 # see also https://breathe.readthedocs.io/en/latest/readthedocs.html
+subprocess.run('doxygen', cwd='..')
 
-env = os.environ.copy()
-env['PATH'] += ':.venv/bin'
-subprocess.call('doxygen', cwd='..')
-subprocess.call(['breathe-apidoc', '-o', 'source/generated', 'source/doxygen/_xml', '-f'], env=env, cwd='..')
-
-
+cpp_id_attributes = [
+    'GPI_EXPORT'
+]
 breathe_projects = { "cocotb": "doxygen/_xml" }
 breathe_default_project = "cocotb"
 breathe_domain_by_extension = {
@@ -329,11 +325,13 @@ spelling_lang = 'en_US'
 tokenizer_lang = spelling_lang
 
 # Location of word list.
-spelling_word_list_filename = ["spelling_wordlist.txt", "c_symbols.txt"]
+spelling_word_list_filename = ["spelling_wordlist.txt"]
+spelling_exclude_patterns = ["generated/**", "master-notes.rst"]
 
 spelling_ignore_pypi_package_names = False
 spelling_ignore_wiki_words = False
 spelling_show_suggestions = True
+spelling_ignore_acronyms=True
 
 # -- Extra setup for inheritance_diagram directive which uses graphviz ---------
 
@@ -342,8 +340,9 @@ graphviz_output_format = 'svg'
 # -- Extra setup for towncrier -------------------------------------------------
 # see also https://towncrier.readthedocs.io/en/actual-freaking-docs/
 
-in_progress_notes = subprocess.check_output(['towncrier', '--draft'],
+# we pass the name and version directly, to avoid towncrier failing to import the non-installed version
+in_progress_notes = subprocess.check_output(['towncrier', '--draft', '--name', 'cocotb', '--version', release],
                                             cwd='../..',
                                             universal_newlines=True)
-with open('generated/master-notes.rst', 'w') as f:
+with open('master-notes.rst', 'w') as f:
     f.write(in_progress_notes)

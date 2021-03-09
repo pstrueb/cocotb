@@ -29,26 +29,61 @@
 
 import os
 import random
+import re
 import warnings
 
+
+_RESOLVE_TO_0      = "-lL"
+_RESOLVE_TO_1      = "hH"
+_RESOLVE_TO_CHOICE = "xXzZuUwW"
 resolve_x_to = os.getenv('COCOTB_RESOLVE_X', "VALUE_ERROR")
 
-def resolve(string):
-    for char in BinaryValue._resolve_to_0:
-        string = string.replace(char, "0")
-    for char in BinaryValue._resolve_to_1:
-        string = string.replace(char, "1")
-    for char in BinaryValue._resolve_to_error:
-        if resolve_x_to == "VALUE_ERROR" and char in string:
-            raise ValueError("Unable to resolve to binary >%s<" % string)
+
+class _ResolveTable(dict):
+    """Translation table class for resolving binary strings.
+
+    For use with :func:`str.translate()`, which indexes into table with Unicode ordinals.
+    """
+    def __init__(self):
+        self.update({ord("0"): ord("0"), ord("1"): ord("1")})
+        self.update({ord(k): ord("0") for k in _RESOLVE_TO_0})
+        self.update({ord(k): ord("1") for k in _RESOLVE_TO_1})
+
+        # Do not resolve if resolve_x_to is not set to one of the supported values
+        def no_resolve(key):
+            return key
+        self.resolve_x = no_resolve
+
+        if resolve_x_to == "VALUE_ERROR":
+            def resolve_error(key):
+                raise ValueError("Unresolvable bit in binary string: '{}'".format(chr(key)))
+            self.resolve_x = resolve_error
         elif resolve_x_to == "ZEROS":
-            string = string.replace(char, "0")
+            self.update({ord(k): ord("0") for k in _RESOLVE_TO_CHOICE})
         elif resolve_x_to == "ONES":
-            string = string.replace(char, "1")
+            self.update({ord(k): ord("1") for k in _RESOLVE_TO_CHOICE})
         elif resolve_x_to == "RANDOM":
-            bits = "{0:b}".format(random.getrandbits(1))
-            string = string.replace(char, bits)
-    return string
+            def resolve_random(key):
+                # convert to correct Unicode ordinal:
+                # ord('0') = 48
+                # ord('1') = 49
+                return random.getrandbits(1) + 48
+            self.resolve_x = resolve_random
+
+        self._resolve_to_choice = {ord(c) for c in _RESOLVE_TO_CHOICE}
+
+    def __missing__(self, key):
+        if key in self._resolve_to_choice:
+            return self.resolve_x(key)
+        else:
+            return key
+
+
+_resolve_table = _ResolveTable()
+
+
+def resolve(string):
+    return string.translate(_resolve_table)
 
 
 def _clog2(val):
@@ -84,14 +119,11 @@ class BinaryValue:
     >>> vec.integer = 42
     >>> print(vec.binstr)
     101010
-    >>> print(repr(vec.buff))
-    '*'
+    >>> print(vec.buff)
+    b'*'
 
     """
-    _resolve_to_0     = "-lL"  # noqa
-    _resolve_to_1     = "hH"  # noqa
-    _resolve_to_error = "xXzZuUwW"  # Resolve to a ValueError() since these usually mean something is wrong
-    _permitted_chars  = _resolve_to_0 +_resolve_to_1 + _resolve_to_error + "01"  # noqa
+    _permitted_chars  = _RESOLVE_TO_0 +_RESOLVE_TO_1 + _RESOLVE_TO_CHOICE + "01"  # noqa
 
     def __init__(self, value=None, n_bits=None, bigEndian=True,
                  binaryRepresentation=BinaryRepresentation.UNSIGNED,
@@ -125,17 +157,9 @@ class BinaryValue:
 
         self._n_bits = n_bits
 
-        self._convert_to = {
-                            BinaryRepresentation.UNSIGNED         : self._convert_to_unsigned   ,
-                            BinaryRepresentation.SIGNED_MAGNITUDE : self._convert_to_signed_mag ,
-                            BinaryRepresentation.TWOS_COMPLEMENT  : self._convert_to_twos_comp  ,
-                            }
+        self._convert_to = self._convert_to_map[self.binaryRepresentation].__get__(self, self.__class__)
 
-        self._convert_from = {
-                            BinaryRepresentation.UNSIGNED         : self._convert_from_unsigned   ,
-                            BinaryRepresentation.SIGNED_MAGNITUDE : self._convert_from_signed_mag ,
-                            BinaryRepresentation.TWOS_COMPLEMENT  : self._convert_from_twos_comp  ,
-                            }
+        self._convert_from = self._convert_from_map[self.binaryRepresentation].__get__(self, self.__class__)
 
         if value is not None:
             self.assign(value)
@@ -143,24 +167,34 @@ class BinaryValue:
     def assign(self, value):
         """Decides how best to assign the value to the vector.
 
-        We possibly try to be a bit too clever here by first of
-        all trying to assign the raw string as a :attr:`BinaryValue.binstr`,
-        however if the string contains any characters that aren't
-        ``0``, ``1``, ``X`` or ``Z``
-        then we interpret the string as a binary buffer.
+        Picks from the type of its argument whether to set :attr:`integer`,
+        :attr:`binstr`, or :attr:`buff`.
 
         Args:
-            value (str or int or long): The value to assign.
+            value (str or int or bytes): The value to assign.
+
+        .. versionchanged:: 1.4
+
+            This no longer falls back to setting :attr:`buff` if a :class:`str`
+            containing any characters that aren't ``0``, ``1``, ``X`` or ``Z``
+            is used, since :attr:`buff` now accepts only :class:`bytes`. Instead,
+            an error is raised.
         """
         if isinstance(value, int):
-            self.value = value
+            self.integer = value
         elif isinstance(value, str):
-            try:
-                self.binstr = value
-            except ValueError:
-                self.buff = value
+            self.binstr = value
+        elif isinstance(value, bytes):
+            self.buff = value
+        else:
+            raise TypeError(
+                "value must be int, str, or bytes, not {!r}"
+                .format(type(value).__qualname__)
+            )
 
     def _convert_to_unsigned(self, x):
+        if x == 0:
+            return self._adjust_unsigned("")
         x = bin(x)
         if x[0] == '-':
             raise ValueError('Attempt to assigned negative number to unsigned '
@@ -168,6 +202,8 @@ class BinaryValue:
         return self._adjust_unsigned(x[2:])
 
     def _convert_to_signed_mag(self, x):
+        if x == 0:
+            return self._adjust_unsigned("")
         x = bin(x)
         if x[0] == '-':
             binstr = self._adjust_signed_mag('1' + x[3:])
@@ -181,6 +217,8 @@ class BinaryValue:
         if x < 0:
             binstr = bin(2 ** (_clog2(abs(x)) + 1) + x)[2:]
             binstr = self._adjust_twos_comp(binstr)
+        elif x == 0:
+            binstr = self._adjust_twos_comp("")
         else:
             binstr = self._adjust_twos_comp('0' + bin(x)[2:])
         if self.big_endian:
@@ -188,35 +226,46 @@ class BinaryValue:
         return binstr
 
     def _convert_from_unsigned(self, x):
-        return int(resolve(x), 2)
+        if not len(x):
+            return 0
+        return int(x.translate(_resolve_table), 2)
 
     def _convert_from_signed_mag(self, x):
-        rv = int(resolve(self._str[1:]), 2)
+        if not len(x):
+            return 0
+        rv = int(self._str[1:].translate(_resolve_table), 2)
         if self._str[0] == '1':
             rv = rv * -1
         return rv
 
     def _convert_from_twos_comp(self, x):
+        if not len(x):
+            return 0
         if x[0] == '1':
             binstr = x[1:]
             binstr = self._invert(binstr)
             rv = int(binstr, 2) + 1
-            if x[0] == '1':
-                rv = rv * -1
+            rv = rv * -1
         else:
-            rv = int(resolve(x), 2)
+            rv = int(x.translate(_resolve_table), 2)
         return rv
 
+    _convert_to_map = {
+        BinaryRepresentation.UNSIGNED         : _convert_to_unsigned,
+        BinaryRepresentation.SIGNED_MAGNITUDE : _convert_to_signed_mag,
+        BinaryRepresentation.TWOS_COMPLEMENT  : _convert_to_twos_comp,
+    }
+
+    _convert_from_map = {
+        BinaryRepresentation.UNSIGNED         : _convert_from_unsigned,
+        BinaryRepresentation.SIGNED_MAGNITUDE : _convert_from_signed_mag,
+        BinaryRepresentation.TWOS_COMPLEMENT  : _convert_from_twos_comp,
+    }
+
+    _invert_table = str.maketrans({'0': '1', '1': '0'})
+
     def _invert(self, x):
-        inverted = ''
-        for bit in x:
-            if bit == '0':
-                inverted = inverted + '1'
-            elif bit == '1':
-                inverted = inverted + '0'
-            else:
-                inverted = inverted + bit
-        return inverted
+        return x.translate(self._invert_table)
 
     def _adjust_unsigned(self, x):
         if self._n_bits is None:
@@ -228,12 +277,12 @@ class BinaryValue:
             else:
                 rv = '0' * (self._n_bits - l) + x
         elif l > self._n_bits:
-            print("WARNING: truncating value to match requested number of bits "
-                  "(%d -> %d)" % (l, self._n_bits))
             if self.big_endian:
                 rv = x[l - self._n_bits:]
             else:
                 rv = x[:l - self._n_bits]
+            warnings.warn("{}-bit value requested, truncating value {!r} ({} bits) to {!r}".format(
+                self._n_bits, x, l, rv), category=RuntimeWarning, stacklevel=3)
         return rv
 
     def _adjust_signed_mag(self, x):
@@ -241,7 +290,7 @@ class BinaryValue:
         if self._n_bits is None:
             return x
         l = len(x)
-        if l <= self._n_bits:
+        if l < self._n_bits:
             if self.big_endian:
                 rv = x[:-1] + '0' * (self._n_bits - 1 - l)
                 rv = rv + x[-1]
@@ -249,12 +298,12 @@ class BinaryValue:
                 rv = '0' * (self._n_bits - 1 - l) + x[1:]
                 rv = x[0] + rv
         elif l > self._n_bits:
-            print("WARNING: truncating value to match requested number of bits "
-                  "(%d -> %d)" % (l, self._n_bits))
             if self.big_endian:
                 rv = x[l - self._n_bits:]
             else:
                 rv = x[:-(l - self._n_bits)]
+            warnings.warn("{}-bit value requested, truncating value {!r} ({} bits) to {!r}".format(
+                self._n_bits, x, l, rv), category=RuntimeWarning, stacklevel=3)
         else:
             rv = x
         return rv
@@ -263,18 +312,20 @@ class BinaryValue:
         if self._n_bits is None:
             return x
         l = len(x)
-        if l <= self._n_bits:
+        if l == 0:
+            rv = x
+        elif l < self._n_bits:
             if self.big_endian:
                 rv = x + x[-1] * (self._n_bits - l)
             else:
                 rv = x[0] * (self._n_bits - l) + x
         elif l > self._n_bits:
-            print("WARNING: truncating value to match requested number of bits "
-                  "(%d -> %d)" % (l, self._n_bits))
             if self.big_endian:
                 rv = x[l - self._n_bits:]
             else:
                 rv = x[:-(l - self._n_bits)]
+            warnings.warn("{}-bit value requested, truncating value {!r} ({} bits) to {!r}".format(
+                self._n_bits, x, l, rv), category=RuntimeWarning, stacklevel=3)
         else:
             rv = x
         return rv
@@ -282,11 +333,11 @@ class BinaryValue:
     @property
     def integer(self):
         """The integer representation of the underlying vector."""
-        return self._convert_from[self.binaryRepresentation](self._str)
+        return self._convert_from(self._str)
 
     @integer.setter
     def integer(self, val):
-        self._str = self._convert_to[self.binaryRepresentation](val)
+        self._str = self._convert_to(val)
 
     @property
     def value(self):
@@ -303,7 +354,7 @@ class BinaryValue:
     @property
     def signed_integer(self):
         """The signed integer representation of the underlying vector."""
-        ival = int(resolve(self._str), 2)
+        ival = int(self._str.translate(_resolve_table), 2)
         bits = len(self._str)
         signbit = (1 << (bits - 1))
         if (ival & signbit) == 0:
@@ -318,41 +369,51 @@ class BinaryValue:
     get_value_signed = signed_integer.fget
 
     @property
-    def is_resolvable(self):
-        """Does the value contain any ``X``'s?  Inquiring minds want to know."""
-        return not any(char in self._str for char in BinaryValue._resolve_to_error)
+    def is_resolvable(self) -> bool:
+        """
+        Return whether the value contains only resolvable (i.e. no "unknown") bits.
+
+        By default the values ``X``, ``Z``, ``U`` and ``W`` are considered unresolvable.
+        This can be configured with :envvar:`COCOTB_RESOLVE_X`.
+
+        This is similar to the SystemVerilog Assertion ``$isunknown`` system function
+        or the VHDL function ``is_x`` (with an inverted meaning).
+        """
+        return not any(char in self._str for char in _RESOLVE_TO_CHOICE)
 
     @property
-    def buff(self):
-        """Attribute :attr:`buff` represents the value as a binary string buffer.
+    def buff(self) -> bytes:
+        r"""The value as a binary string buffer.
 
-        >>> BinaryValue("0100000100101111").buff == "\x41\x2F"
+        >>> BinaryValue("01000001" + "00101111").buff == b"\x41\x2F"
         True
+
+        .. versionchanged:: 1.4
+            This changed from :class:`str` to :class:`bytes`.
+            Note that for older versions used with Python 2 these types were
+            indistinguishable.
         """
-        bits = resolve(self._str)
+        bits = self._str.translate(_resolve_table)
 
         if len(bits) % 8:
             bits = "0" * (8 - len(bits) % 8) + bits
 
-        buff = ""
+        buff = []
         while bits:
             byte = bits[:8]
             bits = bits[8:]
             val = int(byte, 2)
             if self.big_endian:
-                buff += chr(val)
+                buff += [val]
             else:
-                buff = chr(val) + buff
-        return buff
+                buff = [val] + buff
+        return bytes(buff)
 
     @buff.setter
-    def buff(self, val):
-        self._str = ""
-        for char in val:
-            if self.big_endian:
-                self._str += "{0:08b}".format(ord(char))
-            else:
-                self._str = "{0:08b}".format(ord(char)) + self._str
+    def buff(self, val: bytes):
+        if not self.big_endian:
+            val = reversed(val)
+        self._str = ''.join([format(char, "08b") for char in val])
         self._adjust()
 
     def _adjust(self):
@@ -366,9 +427,10 @@ class BinaryValue:
             else:
                 self._str = "0" * (self._n_bits - l) + self._str
         elif l > self._n_bits:
-            print("WARNING: truncating value to match requested number of bits "
-                  "(%d -> %d)" % (l, self._n_bits))
-            self._str = self._str[l - self._n_bits:]
+            rv = self._str[l - self._n_bits:]
+            warnings.warn("{}-bit value requested, truncating value {!r} ({} bits) to {!r}".format(
+                self._n_bits, self._str, l, rv), category=RuntimeWarning, stacklevel=3)
+            self._str = rv
 
     get_buff = buff.fget
     set_buff = buff.fset
@@ -378,17 +440,22 @@ class BinaryValue:
         """ The binary representation stored as a string of ``0``, ``1``, and possibly ``x``, ``z``, and other states. """
         return self._str
 
+    _non_permitted_regex = re.compile("[^{}]".format(_permitted_chars))
+
     @binstr.setter
     def binstr(self, string):
-        for char in string:
-            if char not in BinaryValue._permitted_chars:
-                raise ValueError("Attempting to assign character %s to a %s" %
-                                 (char, type(self).__name__))
+        match = self._non_permitted_regex.search(string)
+        if match:
+            raise ValueError("Attempting to assign character %s to a %s" %
+                             (match.group(), self.__class__.__name__))
         self._str = string
         self._adjust()
 
     get_binstr = binstr.fget
     set_binstr = binstr.fset
+
+    def _set_trusted_binstr(self, string):
+        self._str = string
 
     @property
     def n_bits(self):
@@ -701,6 +768,7 @@ class BinaryValue:
                 self.binstr = self.binstr[:index] + val + self.binstr[index + 1:]
             else:
                 self.binstr = self.binstr[0:self._n_bits-index-1] + val + self.binstr[self._n_bits-index:self._n_bits]
+
 
 if __name__ == "__main__":
     import doctest
